@@ -13,3 +13,6 @@ compile_commands.json
 # other
 _build
 tmp
+
+#vscode
+.vscode

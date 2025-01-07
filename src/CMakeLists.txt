@@ -13,3 +13,4 @@ include(add_injectx_executable)
 
 add_subdirectory(core)
 add_subdirectory(stdext)
+add_subdirectory(args)

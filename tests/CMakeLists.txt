@@ -12,6 +12,7 @@ include(add_injectx_test)
 add_subdirectory(core)
 add_subdirectory(stdext)
 add_subdirectory(args)
+add_subdirectory(json)
 
 add_test(
   NAME cmake-install

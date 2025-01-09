@@ -7,7 +7,6 @@
 namespace injectx::json::parser {
 
 struct Token {
-  std::string_view string_;
   enum class Type {
     Invalid,
     DocumentBegin,
@@ -21,6 +20,7 @@ struct Token {
     Boolean,
     Null,
   } type_ = Type::Invalid;
+  std::string_view string_;
 };
 
 }  // namespace injectx::json::parser

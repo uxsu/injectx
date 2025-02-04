@@ -195,28 +195,28 @@ constexpr JsonStream consumeDocument(
         Token::Type::Invalid}};
   }
   stream.markCurrent();
-  return JsonStream{stream} | stdext::and_then(
-    [&consumer](auto reader)->JsonStream {
-      if (isTokenStart(reader, Token::Type::ObjectBegin)) {
-        return consumeObject(reader, consumer);
-      } else if (isTokenStart(reader, Token::Type::ArrayBegin)) {
-        return consumeArray(reader, consumer);
-      } else {
-        return stdext::unexpected{ParseError{
-            "Document must start with an object or an array", reader.mark(),
-            reader.position(), Token::Type::Invalid}};
-      }
-    }
-  ) | stdext::and_then([](auto reader)->JsonStream{
-    reader.advanceWhile(utility::isSpace);
-    if (reader) {
-      reader.markCurrent();
-      return stdext::unexpected{ParseError{
-          "Json should only contain one object or one array", reader.mark(),
-          reader.position(), Token::Type::Invalid}};
-    }
-    return reader;
-  });
+  return JsonStream{stream}
+       | stdext::and_then([&consumer](auto reader) -> JsonStream {
+           if (isTokenStart(reader, Token::Type::ObjectBegin)) {
+             return consumeObject(reader, consumer);
+           } else if (isTokenStart(reader, Token::Type::ArrayBegin)) {
+             return consumeArray(reader, consumer);
+           } else {
+             return stdext::unexpected{ParseError{
+                 "Document must start with an object or an array",
+                 reader.mark(), reader.position(), Token::Type::Invalid}};
+           }
+         })
+       | stdext::and_then([](auto reader) -> JsonStream {
+           reader.advanceWhile(utility::isSpace);
+           if (reader) {
+             reader.markCurrent();
+             return stdext::unexpected{ParseError{
+                 "Json should only contain one object or one array",
+                 reader.mark(), reader.position(), Token::Type::Invalid}};
+           }
+           return reader;
+         });
 }
 
 constexpr JsonStream consumeObject(
@@ -227,14 +227,16 @@ constexpr JsonStream consumeObject(
         "Object must start with '{'", stream.mark(), stream.position(),
         Token::Type::Invalid}};
   }
-  std::ignore = consumer(Token{.type_ = Token::Type::ObjectBegin, .string_ = stream});
+  std::ignore =
+      consumer(Token{.type_ = Token::Type::ObjectBegin, .string_ = stream});
   stream.advanceWhile(utility::isSpace);
   stream.markCurrent();
   // It should either be the end of the object or the start of a key-value
   // pair
   if (utility::isRightBrace(stream.peek())) {
-    std::ignore = consumer(Token{.type_ = Token::Type::ObjectEnd, .string_ = stream});
-    return stream.advance();
+    std::ignore = consumer(
+        Token{.type_ = Token::Type::ObjectEnd, .string_ = stream.advance()});
+    return stream;
   }
   if (!stream.shouldAdvanceOnce(utility::isQuote)) {
     return stdext::unexpected{ParseError{
@@ -251,32 +253,36 @@ constexpr JsonStream consumeKeyValuePairs(
       utility::isQuote(stream.peek()),
       "Programming error, consumeKeyValuePairs must start with a string");
   while (stream) {
-    if (auto result = consumeString(stream, consumer)) {
-      stream = result.value();
-    } else {
+    auto result =
+        JsonStream{stream}
+        | stdext::and_then([&consumer](auto reader) -> JsonStream {
+            return consumeString(reader, consumer);
+          })
+        | stdext::and_then([&consumer](auto reader) -> JsonStream {
+            if (!reader.advanceWhile(utility::isSpace)) {
+              return stdext::unexpected{ParseError{
+                  "Object key-value pair must end with '}'", reader.mark(),
+                  reader.position(), Token::Type::Invalid}};
+            }
+            if (!reader.shouldAdvanceOnce(utility::isColon)) {
+              return stdext::unexpected{ParseError{
+                  "Object key-value pair must have a colon ':' and a value "
+                  "following "
+                  "it",
+                  reader.mark(), reader.position(), Token::Type::Invalid}};
+            }
+            return consumeValue(reader, consumer);
+          });
+    if (!result.has_value()) {
       return result;
     }
-    if (!stream.advanceWhile(utility::isSpace)) {
-      return stdext::unexpected{ParseError{
-          "Object key-value pair must end with '}'", stream.mark(),
-          stream.position(), Token::Type::Invalid}};
-    }
-    if (!stream.shouldAdvanceOnce(utility::isColon)) {
-      return stdext::unexpected{ParseError{
-          "Object key-value pair must have a colon ':' and a value following "
-          "it",
-          stream.mark(), stream.position(), Token::Type::Invalid}};
-    }
-    if (auto result = consumeValue(stream, consumer)) {
-      stream = result.value();
-    } else {
-      return result;
-    }
+    stream = result.value();
     stream.advanceWhile(utility::isSpace);
     stream.markCurrent();
     if (utility::isRightBrace(stream.peek())) {
-      std::ignore = consumer(Token{.type_ = Token::Type::ObjectEnd, .string_ = stream});
-      return stream.advance().markCurrent();
+      std::ignore = consumer(
+          Token{.type_ = Token::Type::ObjectEnd, .string_ = stream.advance()});
+      return stream.markCurrent();
     } else if (utility::isComma(stream.peek())) {
       stream.advance();
       stream.advanceWhile(utility::isSpace);
@@ -301,7 +307,8 @@ constexpr JsonStream consumeArray(
         "Array must start with '['", stream.mark(), stream.position(),
         Token::Type::Invalid}};
   }
-  std::ignore = consumer(Token{.type_ = Token::Type::ArrayBegin, .string_ = stream});
+  std::ignore =
+      consumer(Token{.type_ = Token::Type::ArrayBegin, .string_ = stream});
   stream.advanceWhile(utility::isSpace);
   stream.markCurrent();
   if (!stream) {
@@ -310,8 +317,9 @@ constexpr JsonStream consumeArray(
         Token::Type::Invalid}};
   }
   if (utility::isRightBracket(stream.peek())) {
-    std::ignore = consumer(Token{.type_ = Token::Type::ArrayEnd, .string_ = stream});
-    return stream.advance().markCurrent();
+    std::ignore = consumer(
+        Token{.type_ = Token::Type::ArrayEnd, .string_ = stream.advance()});
+    return stream.markCurrent();
   }
   return consumeArrayElements(stream, consumer);
 }
@@ -319,16 +327,20 @@ constexpr JsonStream consumeArray(
 constexpr JsonStream consumeArrayElements(
     JsonReader stream, Consumer auto& consumer) noexcept {
   while (stream) {
-    if (auto result = consumeValue(stream, consumer)) {
-      stream = result.value();
-    } else {
+    auto result = JsonStream{stream}
+                | stdext::and_then([&consumer](auto reader) -> JsonStream {
+                    return consumeValue(reader, consumer);
+                  });
+    if (!result.has_value()) {
       return result;
     }
+    stream = result.value();
     stream.advanceWhile(utility::isSpace);
     stream.markCurrent();
     if (utility::isRightBracket(stream.peek())) {
-      std::ignore = consumer(Token{.type_ = Token::Type::ArrayEnd, .string_ = stream});
-      return stream.advance().markCurrent();
+      std::ignore = consumer(
+          Token{.type_ = Token::Type::ArrayEnd, .string_ = stream.advance()});
+      return stream.markCurrent();
     } else if (utility::isComma(stream.peek())) {
       stream.advance().advanceWhile(utility::isSpace).markCurrent();
     } else {
@@ -387,13 +399,9 @@ constexpr JsonStream consumeString(
           Token::Type::Invalid}};
     }
     if (utility::isQuote(stream.peek())) {
-      if (auto result = consumer(Token{
-              .type_ = Token::Type::String,
-              .string_ = stream.fromMarked(0, 1)})) {
-        return stream.advance();
-      } else {
-        return result.error();
-      }
+      std::ignore = consumer(Token{
+          .type_ = Token::Type::String, .string_ = stream.fromMarked(0, 1)});
+      return stream.advance();
     }
     stream.advance();
     if (utility::isUnicodeIndicator(stream.peek())) {
@@ -472,7 +480,8 @@ constexpr JsonStream consumeNumber(
           stream.position(), Token::Type::Invalid}};
     }
   }
-  std::ignore = consumer(Token{.type_ = Token::Type::Number, .string_ = stream});
+  std::ignore =
+      consumer(Token{.type_ = Token::Type::Number, .string_ = stream});
   return stream;
 }
 
@@ -481,10 +490,12 @@ constexpr JsonStream consumeBoolean(
   stream.markCurrent();
   if (stream.isNext("true")) {
     stream.advance(4);
-    std::ignore = consumer(Token{.type_ = Token::Type::Boolean, .string_ = stream});
+    std::ignore =
+        consumer(Token{.type_ = Token::Type::Boolean, .string_ = stream});
   } else if (stream.isNext("false")) {
     stream.advance(5);
-    std::ignore = consumer(Token{.type_ = Token::Type::Boolean, .string_ = stream});
+    std::ignore =
+        consumer(Token{.type_ = Token::Type::Boolean, .string_ = stream});
   } else {
     return stdext::unexpected{ParseError{
         "Programming error, code shouldn't be visiting here", stream.mark(),
@@ -498,7 +509,8 @@ constexpr JsonStream consumeNull(
   stream.markCurrent();
   if (stream.isNext("null")) {
     stream.advance(4);
-    std::ignore = consumer(Token{.type_ = Token::Type::Null, .string_ = stream});
+    std::ignore =
+        consumer(Token{.type_ = Token::Type::Null, .string_ = stream});
   } else {
     return stdext::unexpected{ParseError{
         "Programming error, code shouldn't be visiting here", stream.mark(),

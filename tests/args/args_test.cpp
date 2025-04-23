@@ -2,6 +2,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <string>
+
 namespace injectx::args::tests {
 
 TEST_CASE("args::arg") {
@@ -84,6 +86,14 @@ TEST_CASE("args::arg") {
   constexpr auto logicalNot = !arg;
   REQUIRE_FALSE(logicalNot(true));
   REQUIRE(logicalNot(false));
+  struct Test {
+    std::string string;
+  };
+  constexpr auto projection = args::arg(&Test::string);
+  Test t{"abc"};
+  auto result = projection + projection;
+  REQUIRE(result(t) == std::string("abcabc"));
+
 }
 
 TEST_CASE("xy-z") {

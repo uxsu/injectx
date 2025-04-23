@@ -8,10 +8,46 @@
 namespace injectx::args {
 namespace details {
 
+template<typename Type>
+concept MemberPointer = std::is_member_pointer_v<std::remove_reference_t<Type>>;
+
+// template <typename Type>
+// concept MemberFunction = std::is_member_function_pointer_v<Type>;
+
 template<typename Tuple, typename Callable, int arg_position>
 constexpr auto call(Tuple t, Callable callable) {
   return callable(std::get<arg_position>(t));
 }
+
+template<MemberPointer Callable>
+struct MemberPointerCallable {
+  Callable callable;
+  template<typename T>
+  constexpr auto operator()(T t) {
+    if constexpr (std::is_pointer_v<std::remove_reference_t<T>>) {
+      return t->*(callable);
+    } else {
+      return t.*(callable);
+    }
+  }
+};
+
+template<MemberPointer Callable>
+constexpr auto makeMemberPointerCallable(Callable callable) {
+  return MemberPointerCallable<Callable>{callable};
+}
+
+// template<typename Tuple, MemberFunction Callable, int arg_position>
+// constexpr auto call(Tuple t, Callable callable) {
+//   if constexpr
+//   (std::is_pointer_v<std::remove_reference_t<std::tuple_element_t<arg_position,
+//   Tuple>>>) {
+//     return callable(*std::get<arg_position>(t));
+//   }
+//   else {
+//     return callable(std::get<arg_position>(t));
+//   }
+// }
 
 // Required to have a way to differentiate between arg and other types
 struct ArgTag {};
@@ -50,27 +86,34 @@ template<class Callable, int arg_position, typename Context>
 struct Arg {
   using Tag = ArgTag;
   using ContextTag = Context;
-  Callable callable_;
+  using CallableType = Callable;
+  CallableType callable_;
 
-  constexpr Arg(Callable&& callable)
-      : callable_(callable) {
+  constexpr Arg(Callable&& callable) : callable_(callable) {
   }
 
   template<typename... Args>
   constexpr auto operator()(Args&&... args) const {
     if constexpr (arg_position != -1) {
       auto t = std::make_tuple(args...);
-      return details::call<decltype(t), Callable, arg_position>(t, callable_);
+      return details::call<decltype(t), CallableType, arg_position>(
+          t, callable_);
     } else {
       return callable_(args...);
     }
+  }
+
+  template<MemberPointer MemberPointerType>
+  constexpr auto operator()(MemberPointerType callable) const {
+    return Arg<MemberPointerCallable<MemberPointerType>, arg_position, Context>(std::move(makeMemberPointerCallable(callable)));
   }
 
   template<typename... Args>
   constexpr auto operator()(Args&... args) const {
     if constexpr (arg_position != -1) {
       auto t = std::make_tuple(args...);
-      return details::call<decltype(t), Callable, arg_position>(t, callable_);
+      return details::call<decltype(t), CallableType, arg_position>(
+          t, callable_);
     } else {
       return callable_(args...);
     }
@@ -79,15 +122,16 @@ struct Arg {
   template<typename Operator, ArgLike OtherArgLike>
   constexpr auto thisComposeOther(OtherArgLike f, Operator) const {
     static_assert(
-        SharesContextWith<OtherArgLike, Arg<Callable, arg_position, Context>>,
+        SharesContextWith<
+            OtherArgLike, Arg<CallableType, arg_position, Context>>,
         "The arguments must share the same context, make sure not to mix "
         "arguments from unrelated namespaces.");
     auto composed = [l = *this, r = f](auto&&... args) {
       Operator op{};
       return op(l(args...), r(args...));
     };
-    using CommonContext =
-        common_context_t<OtherArgLike, Arg<Callable, arg_position, Context>>;
+    using CommonContext = common_context_t<
+        OtherArgLike, Arg<CallableType, arg_position, Context>>;
     return Arg<decltype(composed), -1, CommonContext>(std::move(composed));
   }
 

@@ -1,617 +1,706 @@
 #pragma once
 
-#include <injectx/json/parser/stringparser.hpp>
+#include <algorithm>
+#include <array>
 #include <injectx/json/parser/token.hpp>
 #include <injectx/json/parser/utility.hpp>
 #include <injectx/stdext/expected.hpp>
-#include <injectx/stdext/static_string.hpp>
+#include <vector>
 
 namespace injectx::json::parser {
 
 struct ParseError {
   std::string_view message_;
-  std::size_t parse_begin_;
-  std::size_t parse_end_;
-  Token::Type token_type_;
+  std::size_t parse_begin_ = 0;
+  std::size_t parse_end_ = 0;
+  Token::Type token_type_ = Token::Type::Invalid;
 };
 
-namespace details {
+struct JsonCursor {
+  std::string_view json;
+  std::size_t current = 0;
+  std::size_t marked = 0;
+};
 
-class JsonReader {
-  std::string_view json_;
-  std::size_t current_position_ = 0;
-  std::size_t marked_position_ = 0;
+using CursorOrError = stdext::expected<JsonCursor, ParseError>;
 
- public:
-  constexpr JsonReader(std::string_view json)
-      : json_(json) {
+namespace details::_parser {
+
+inline constexpr char peek(JsonCursor cursor) {
+  return cursor.json[cursor.current];
+}
+
+inline constexpr void advance(JsonCursor& cursor, std::size_t step = 1) {
+  cursor.current = cursor.current + step;
+}
+
+inline constexpr std::size_t size(JsonCursor cursor) {
+  return cursor.json.size();
+}
+
+inline constexpr bool canRead(JsonCursor cursor) {
+  return cursor.current < size(cursor);
+}
+
+inline constexpr bool isNext(JsonCursor cursor, std::string_view str) {
+  if (cursor.current + str.size() > size(cursor)) {
+    return false;
   }
+  return std::string_view(cursor.json.data() + cursor.current, str.size())
+      == str;
+}
 
-  inline constexpr char peek() const noexcept {
-    return json_[current_position_];
-  }
+inline constexpr JsonCursor mark(JsonCursor cursor) {
+  cursor.marked = cursor.current;
+  return cursor;
+}
 
-  inline constexpr bool canRead() const noexcept {
-    return current_position_ < json_.size();
-  }
+inline constexpr std::string_view fromMarked(
+    JsonCursor cursor, std::size_t markOffset, std::size_t currentOffset) {
+  return cursor.json.substr(
+      cursor.marked + markOffset,
+      cursor.current - currentOffset - cursor.marked - markOffset);
+}
 
-  inline constexpr JsonReader& markCurrent() noexcept {
-    marked_position_ = current_position_;
-    return *this;
-  }
+struct ErrorInfo {
+  std::string_view message = "";
+  Token::Type type = Token::Type::Invalid;
 
-  inline constexpr JsonReader& advance(std::size_t steps = 1) noexcept {
-    current_position_ += std::min(steps, json_.size() - current_position_);
-    return *this;
-  }
-
-  template<typename Predicate>
-  inline constexpr JsonReader& advanceIfOnce(Predicate predicate) noexcept {
-    if (canRead() && predicate(peek())) {
-      advance();
-    }
-    return *this;
-  }
-
-  template<typename Predicate>
-  inline constexpr JsonReader& advanceWhile(Predicate predicate) noexcept {
-    while (canRead() && predicate(peek())) {
-      advance();
-    }
-    return *this;
-  }
-
-  template<typename Predicate>
-  inline constexpr JsonReader& shouldAdvanceOnce(Predicate predicate) noexcept {
-    if (canRead() && predicate(peek())) {
-      advance();
-    } else {
-      current_position_ = json_.size();
-    }
-    return *this;
-  }
-
-  template<typename Predicate>
-  inline constexpr JsonReader& shouldAdvance(
-      Predicate predicate, std::size_t steps = 1) noexcept {
-    if (steps == 0) {
-      return *this;
-    }
-    while (canRead() && steps > 0) {
-      shouldAdvanceOnce(predicate);
-    }
-    return *this;
-  }
-
-  inline constexpr JsonReader& advanceToEnd() noexcept {
-    current_position_ = json_.size();
-    return *this;
-  }
-
-  inline constexpr std::size_t mark() const noexcept {
-    return marked_position_;
-  }
-
-  inline constexpr std::size_t position() const noexcept {
-    return current_position_;
-  }
-
-  inline constexpr std::string_view fromMarked(
-      std::size_t mark_offset = 0,
-      std::size_t current_offset = 0) const noexcept {
-    if (current_position_ - marked_position_ + current_offset
-        < marked_position_ + mark_offset) {
-      return "";
-    }
-    return json_.substr(
-        marked_position_ + mark_offset,
-        current_position_ - marked_position_ - current_offset);
-  }
-
-  inline constexpr bool isNext(std::string_view str) const noexcept {
-    return json_.substr(current_position_, str.size()) == str;
-  }
-
-  inline constexpr operator char() const noexcept {
-    return peek();
-  }
-
-  inline constexpr operator std::string_view() const noexcept {
-    return fromMarked();
-  }
-
-  inline constexpr operator bool() const noexcept {
-    return canRead();
+  inline constexpr auto makeError(JsonCursor cursor) const {
+    return stdext::unexpected{ParseError{
+        .message_ = message,
+        .parse_begin_ = cursor.marked,
+        .parse_end_ = cursor.current,
+        .token_type_ = type}};
   }
 };
 
-enum class ConsumeAction {
-  CountTokens,
-  ExtractTokens,
+template<typename Predicate>
+struct MayAdvance {
+  Predicate predicate;
+  std::size_t steps = std::numeric_limits<std::size_t>::max();
+  bool reachingEndAsError = false;
+  ErrorInfo errorInfo{};
+
+  inline constexpr CursorOrError operator()(JsonCursor cursor) {
+    std::size_t step = 0;
+    while (step < steps && canRead(cursor) && predicate(peek(cursor))) {
+      advance(cursor);
+      ++steps;
+    }
+    if (reachingEndAsError && !canRead(cursor)) {
+      return errorInfo.makeError(cursor);
+    }
+    return cursor;
+  }
 };
+
+template<typename Predicate>
+struct ShouldAdvance {
+  Predicate predicate;
+  std::size_t steps = 1;
+  ErrorInfo errorInfo{};
+
+  inline constexpr CursorOrError operator()(JsonCursor cursor) {
+    if (cursor.current + steps > size(cursor)) {
+      return errorInfo.makeError(cursor);
+    }
+    std::size_t step = 0;
+    while (step < steps) {
+      if (!predicate(peek(cursor))) {
+        return errorInfo.makeError(cursor);
+      }
+      ++step;
+      advance(cursor);
+    }
+    return cursor;
+  }
+};
+
+template<typename Predicate>
+struct AdvanceWhile {
+  Predicate predicate;
+  bool reachingEndAsError = true;
+  ErrorInfo errorInfo{};
+
+  inline constexpr CursorOrError operator()(JsonCursor cursor) {
+    while (canRead(cursor) && predicate(peek(cursor))) {
+      advance(cursor);
+    }
+    if (reachingEndAsError && !canRead(cursor)) {
+      return errorInfo.makeError(cursor);
+    }
+    return cursor;
+  }
+};
+
+inline constexpr CursorOrError shouldSkipIntegerPart(JsonCursor cursor) {
+  if (utility::isMinus(peek(cursor))) {
+    advance(cursor);
+  }
+  if (utility::isZero(peek(cursor))) {
+    advance(cursor);
+    return cursor;
+  }
+  return AdvanceWhile{
+      .predicate = utility::isDigit,
+      .errorInfo = {
+          .message = "'-' should be followed by a digit.",
+          .type = Token::Type::Number}}(cursor);
+}
+
+inline constexpr CursorOrError tryAdvanceFractionalPart(JsonCursor cursor) {
+  if (!utility::isDot(peek(cursor))) {
+    return cursor;
+  }
+  advance(cursor);
+  return CursorOrError(cursor)
+       | stdext::and_then(ShouldAdvance{
+           .predicate = utility::isDigit,
+           .errorInfo =
+               {.message = "'.' should be followed by a digit",
+                .type = Token::Type::Number}})
+       | stdext::and_then(AdvanceWhile{
+           .predicate = utility::isDigit,
+           .errorInfo = {
+               .message = "Reached to end while parsing a number",
+               .type = Token::Type::Number}});
+}
+
+inline constexpr CursorOrError tryAdvanceExponentialPart(JsonCursor cursor) {
+  if (!utility::isExponent(peek(cursor))) {
+    return cursor;
+  }
+  advance(cursor);
+  return CursorOrError(cursor)
+       | stdext::and_then(MayAdvance{
+           .predicate = utility::isPlus || utility::isMinus, .steps = 1})
+       | stdext::and_then(ShouldAdvance{
+           .predicate = utility::isDigit,
+           .errorInfo =
+               {.message = "'e(+/-)' or 'E(+/-)' should be followed by a digit",
+                .type = Token::Type::Number}})
+       | stdext::and_then(AdvanceWhile{
+           .predicate = utility::isDigit,
+           .errorInfo = {
+               .message = "Reached to end while parsing a number",
+               .type = Token::Type::Number}});
+}
+
+inline constexpr CursorOrError advanceBoolean(JsonCursor cursor) {
+  mark(cursor);
+  if (isNext(cursor, "true")) {
+    advance(cursor, 4);
+    return cursor;
+  } else if (isNext(cursor, "false")) {
+    advance(cursor, 5);
+    return cursor;
+  }
+  return ErrorInfo{
+      .message = "Expected a boolean but couldn't parse it",
+      .type = Token::Type::Boolean}
+      .makeError(cursor);
+}
+
+inline constexpr CursorOrError advanceNull(JsonCursor cursor) {
+  mark(cursor);
+  if (isNext(cursor, "null")) {
+    advance(cursor, 4);
+    return cursor;
+  }
+  return ErrorInfo{
+      .message = "Expected null but couldn't parse it",
+      .type = Token::Type::Null}
+      .makeError(cursor);
+}
+
+}  // namespace details::_parser
 
 template<typename T>
 concept Consumer = requires(T t, Token token) {
-  {
-    t.operator()(token)
-  } -> std::same_as<stdext::expected<void, std::string_view>>;
+  { t.operator()(token) } -> std::same_as<stdext::expected<void, ParseError>>;
 };
 
-using JsonStream = stdext::expected<JsonReader, ParseError>;
+// declarations needed since consumeValue is used in consumeArrayElements
+// and consumeKeyValuePairs it is neater to declare all consume* functions
+// together
+inline constexpr CursorOrError consumeDocument(JsonCursor, Consumer auto&);
 
-constexpr bool isTokenStart(JsonReader stream, Token::Type type) noexcept {
-  char c = stream.peek();
+inline constexpr CursorOrError consumeObject(JsonCursor, Consumer auto&);
+
+inline constexpr CursorOrError consumeKeyValuePairs(JsonCursor, Consumer auto&);
+
+inline constexpr CursorOrError consumeArray(JsonCursor, Consumer auto&);
+
+inline constexpr CursorOrError consumeArrayElements(JsonCursor, Consumer auto&);
+
+inline constexpr CursorOrError consumeValue(JsonCursor, Consumer auto&);
+
+inline constexpr CursorOrError consumeString(JsonCursor, Consumer auto&);
+
+inline constexpr CursorOrError consumeNumber(JsonCursor, Consumer auto&);
+
+inline constexpr CursorOrError consumeBoolean(JsonCursor, Consumer auto&);
+
+inline constexpr CursorOrError consumeNull(JsonCursor, Consumer auto&);
+
+enum class ConsumerType {
+  Document,
+  Object,
+  KeyValues,
+  Array,
+  Elements,
+  Value,
+  String,
+  Number,
+  Boolean,
+  Null
+};
+template<Consumer StreamConsumer>
+using ConsumeFunction = CursorOrError (*)(JsonCursor, StreamConsumer&);
+
+template<Consumer StreamConsumer>
+static constexpr auto ConsumeFunctions = std::array{
+    std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
+        ConsumerType::Document, &consumeDocument<StreamConsumer>},
+    std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
+        ConsumerType::Object, &consumeObject<StreamConsumer>},
+    std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
+        ConsumerType::KeyValues, &consumeKeyValuePairs<StreamConsumer>},
+    std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
+        ConsumerType::Array, &consumeArray<StreamConsumer>},
+    std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
+        ConsumerType::Elements, &consumeArrayElements<StreamConsumer>},
+    std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
+        ConsumerType::Value, &consumeValue<StreamConsumer>},
+    std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
+        ConsumerType::String, &consumeString<StreamConsumer>},
+    std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
+        ConsumerType::Number, &consumeNumber<StreamConsumer>},
+    std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
+        ConsumerType::Boolean, &consumeBoolean<StreamConsumer>},
+    std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
+        ConsumerType::Null, &consumeNull<StreamConsumer>},
+};
+
+template<Consumer StreamConsumer>
+constexpr ConsumeFunction<StreamConsumer> selectConsumeFunction(
+    ConsumerType type) {
+  for (const auto& [t, f] : ConsumeFunctions<StreamConsumer>) {
+    if (t == type) {
+      return f;
+    }
+  }
+  return ConsumeFunctions<StreamConsumer>[0].second;
+}
+
+namespace details::_parser {
+inline constexpr bool canConsume(JsonCursor cursor, ConsumerType type) {
+  char c = peek(cursor);
   switch (type) {
-    case Token::Type::ObjectBegin:
+    case ConsumerType::Document:
+      return canConsume(cursor, ConsumerType::Object)
+          || canConsume(cursor, ConsumerType::Array);
+    case ConsumerType::Object:
       return utility::isLeftBrace(c);
-    case Token::Type::ObjectEnd:
-      return utility::isRightBrace(c);
-    case Token::Type::ArrayBegin:
+    case ConsumerType::KeyValues:
+      return canConsume(cursor, ConsumerType::String)
+          || utility::isRightBrace(c);
+    case ConsumerType::Array:
       return utility::isLeftBracket(c);
-    case Token::Type::ArrayEnd:
-      return utility::isRightBracket(c);
-    case Token::Type::String:
+    case ConsumerType::Elements:
+      return canConsume(cursor, ConsumerType::Value)
+          || utility::isRightBracket(c);
+    case ConsumerType::Value:
+      return canConsume(cursor, ConsumerType::String)
+          || canConsume(cursor, ConsumerType::Number)
+          || canConsume(cursor, ConsumerType::Boolean)
+          || canConsume(cursor, ConsumerType::Null);
+    case ConsumerType::String:
       return utility::isQuote(c);
-    case Token::Type::Number:
+    case ConsumerType::Number:
       return utility::canNumberStartWith(c);
-    case Token::Type::Boolean:
-      return c == utility::canBooleanStartWith(c);
-    case Token::Type::Null:
-      return c == utility::canNullStartWith(c);
+    case ConsumerType::Boolean:
+      return utility::canBooleanStartWith(c);
+    case ConsumerType::Null:
+      return utility::canNullStartWith(c);
     default:
       return false;
   }
 }
 
-// declatations needed since consumeValue is used in consumeArrayElements and
-// consumeKeyValuePairs
-//  it is neater to declare all consume* functions together
-constexpr JsonStream consumeDocument(JsonReader, Consumer auto&) noexcept;
+template<Consumer StreamConsumer>
+struct SelectConsumer {
+  StreamConsumer& consumer;
+  std::vector<ConsumerType> allowedConsumerTypes{};
+  ErrorInfo errorInfo{};
 
-constexpr JsonStream consumeObject(JsonReader, Consumer auto&) noexcept;
-
-constexpr JsonStream consumeKeyValuePairs(JsonReader, Consumer auto&) noexcept;
-
-constexpr JsonStream consumeArray(JsonReader, Consumer auto&) noexcept;
-
-constexpr JsonStream consumeArrayElements(JsonReader, Consumer auto&) noexcept;
-
-constexpr JsonStream consumeValue(JsonReader, Consumer auto&) noexcept;
-
-constexpr JsonStream consumeString(JsonReader, Consumer auto&) noexcept;
-
-constexpr JsonStream consumeNumber(JsonReader, Consumer auto&) noexcept;
-
-constexpr JsonStream consumeBoolean(JsonReader, Consumer auto&) noexcept;
-
-constexpr JsonStream consumeNull(JsonReader, Consumer auto&) noexcept;
-
-constexpr JsonStream consumeDocument(
-    JsonReader stream, Consumer auto& consumer) noexcept {
-  stream.advanceWhile(utility::isSpace);
-  if (!stream) {
-    return stdext::unexpected{ParseError{
-        "Empty document", stream.mark(), stream.position(),
-        Token::Type::Invalid}};
-  }
-  stream.markCurrent();
-  return JsonStream{stream}
-       | stdext::and_then([&consumer](auto reader) -> JsonStream {
-           if (isTokenStart(reader, Token::Type::ObjectBegin)) {
-             return consumeObject(reader, consumer);
-           } else if (isTokenStart(reader, Token::Type::ArrayBegin)) {
-             return consumeArray(reader, consumer);
-           } else {
-             return stdext::unexpected{ParseError{
-                 "Document must start with an object or an array",
-                 reader.mark(), reader.position(), Token::Type::Invalid}};
-           }
-         })
-       | stdext::and_then([](auto reader) -> JsonStream {
-           reader.advanceWhile(utility::isSpace);
-           if (reader) {
-             reader.markCurrent();
-             return stdext::unexpected{ParseError{
-                 "Json should only contain one object or one array",
-                 reader.mark(), reader.position(), Token::Type::Invalid}};
-           }
-           return reader;
-         });
-}
-
-constexpr JsonStream consumeObject(
-    JsonReader stream, Consumer auto& consumer) noexcept {
-  stream.markCurrent();
-  if (!stream.shouldAdvanceOnce(utility::isLeftBrace)) {
-    return stdext::unexpected{ParseError{
-        "Object must start with '{'", stream.mark(), stream.position(),
-        Token::Type::Invalid}};
-  }
-  std::ignore =
-      consumer(Token{.type_ = Token::Type::ObjectBegin, .string_ = stream});
-  stream.advanceWhile(utility::isSpace);
-  stream.markCurrent();
-  // It should either be the end of the object or the start of a key-value
-  // pair
-  if (utility::isRightBrace(stream.peek())) {
-    std::ignore = consumer(
-        Token{.type_ = Token::Type::ObjectEnd, .string_ = stream.advance()});
-    return stream;
-  }
-  if (!stream.shouldAdvanceOnce(utility::isQuote)) {
-    return stdext::unexpected{ParseError{
-        "Object key must be a string", stream.mark(), stream.position(),
-        Token::Type::Invalid}};
-  }
-  stream.markCurrent();
-  return consumeKeyValuePairs(stream, consumer);
-}
-
-constexpr JsonStream consumeKeyValuePairs(
-    JsonReader stream, Consumer auto& consumer) noexcept {
-  stdext::expects(
-      utility::isQuote(stream.peek()),
-      "Programming error, consumeKeyValuePairs must start with a string");
-  while (stream) {
-    auto result =
-        JsonStream{stream}
-        | stdext::and_then([&consumer](auto reader) -> JsonStream {
-            return consumeString(reader, consumer);
-          })
-        | stdext::and_then([&consumer](auto reader) -> JsonStream {
-            if (!reader.advanceWhile(utility::isSpace)) {
-              return stdext::unexpected{ParseError{
-                  "Object key-value pair must end with '}'", reader.mark(),
-                  reader.position(), Token::Type::Invalid}};
-            }
-            if (!reader.shouldAdvanceOnce(utility::isColon)) {
-              return stdext::unexpected{ParseError{
-                  "Object key-value pair must have a colon ':' and a value "
-                  "following "
-                  "it",
-                  reader.mark(), reader.position(), Token::Type::Invalid}};
-            }
-            return consumeValue(reader, consumer);
-          });
-    if (!result.has_value()) {
-      return result;
-    }
-    stream = result.value();
-    stream.advanceWhile(utility::isSpace);
-    stream.markCurrent();
-    if (utility::isRightBrace(stream.peek())) {
-      std::ignore = consumer(
-          Token{.type_ = Token::Type::ObjectEnd, .string_ = stream.advance()});
-      return stream.markCurrent();
-    } else if (utility::isComma(stream.peek())) {
-      stream.advance();
-      stream.advanceWhile(utility::isSpace);
-      stream.markCurrent();
-    } else {
-      return stdext::unexpected{ParseError{
-          "Object key-value pair must end with '}'", stream.mark(),
-          stream.position(), Token::Type::Invalid}};
-    }
-  }
-  stream.markCurrent();
-  return stdext::unexpected{ParseError{
-      "Reached to the end while searching for key-value pairs", stream.mark(),
-      stream.position(), Token::Type::Invalid}};
-}
-
-constexpr JsonStream consumeArray(
-    JsonReader stream, Consumer auto& consumer) noexcept {
-  stream.markCurrent();
-  if (!stream.shouldAdvanceOnce(utility::isLeftBracket)) {
-    return stdext::unexpected{ParseError{
-        "Array must start with '['", stream.mark(), stream.position(),
-        Token::Type::Invalid}};
-  }
-  std::ignore =
-      consumer(Token{.type_ = Token::Type::ArrayBegin, .string_ = stream});
-  stream.advanceWhile(utility::isSpace);
-  stream.markCurrent();
-  if (!stream) {
-    return stdext::unexpected{ParseError{
-        "Array must end with ']'", stream.mark(), stream.position(),
-        Token::Type::Invalid}};
-  }
-  if (utility::isRightBracket(stream.peek())) {
-    std::ignore = consumer(
-        Token{.type_ = Token::Type::ArrayEnd, .string_ = stream.advance()});
-    return stream.markCurrent();
-  }
-  return consumeArrayElements(stream, consumer);
-}
-
-constexpr JsonStream consumeArrayElements(
-    JsonReader stream, Consumer auto& consumer) noexcept {
-  while (stream) {
-    auto result = JsonStream{stream}
-                | stdext::and_then([&consumer](auto reader) -> JsonStream {
-                    return consumeValue(reader, consumer);
-                  });
-    if (!result.has_value()) {
-      return result;
-    }
-    stream = result.value();
-    stream.advanceWhile(utility::isSpace);
-    stream.markCurrent();
-    if (utility::isRightBracket(stream.peek())) {
-      std::ignore = consumer(
-          Token{.type_ = Token::Type::ArrayEnd, .string_ = stream.advance()});
-      return stream.markCurrent();
-    } else if (utility::isComma(stream.peek())) {
-      stream.advance().advanceWhile(utility::isSpace).markCurrent();
-    } else {
-      return stdext::unexpected{ParseError{
-          "Array elements must be separated by a comma ','", stream.mark(),
-          stream.position(), Token::Type::Invalid}};
-    }
-  }
-  stream.markCurrent();
-  return stdext::unexpected{ParseError{
-      "Reached to the end while searching for array elements", stream.mark(),
-      stream.position(), Token::Type::Invalid}};
-}
-
-constexpr JsonStream consumeValue(
-    JsonReader stream, Consumer auto& consumer) noexcept {
-  stream.advanceWhile(utility::isSpace);
-  stream.markCurrent();
-  if (!stream) {
-    return stdext::unexpected{ParseError{
-        "Empty value", stream.mark(), stream.position(), Token::Type::Invalid}};
-  }
-  if (isTokenStart(stream, Token::Type::ObjectBegin)) {
-    return consumeObject(stream, consumer);
-  } else if (isTokenStart(stream, Token::Type::ArrayBegin)) {
-    return consumeArray(stream, consumer);
-  } else if (isTokenStart(stream, Token::Type::String)) {
-    return consumeString(stream, consumer);
-  } else if (isTokenStart(stream, Token::Type::Number)) {
-    return consumeNumber(stream, consumer);
-  } else if (isTokenStart(stream, Token::Type::Boolean)) {
-    return consumeBoolean(stream, consumer);
-  } else if (isTokenStart(stream, Token::Type::Null)) {
-    return consumeNull(stream, consumer);
-  } else {
-    return stdext::unexpected{ParseError{
-        "Invalid value", stream.mark(), stream.position(),
-        Token::Type::Invalid}};
-  }
-}
-
-constexpr JsonStream consumeString(
-    JsonReader stream, Consumer auto& consumer) noexcept {
-  stream.markCurrent();
-  if (!stream.shouldAdvanceOnce(utility::isQuote)) {
-    return stdext::unexpected{ParseError{
-        "String must start with '\"'", stream.mark(), stream.position(),
-        Token::Type::Invalid}};
-  }
-  stream.markCurrent();
-  while (stream) {
-    stream.advanceWhile(utility::isQuote || utility::isBackslash);
-    if (!stream) {
-      return stdext::unexpected{ParseError{
-          "String must end with '\"'", stream.mark(), stream.position(),
-          Token::Type::Invalid}};
-    }
-    if (utility::isQuote(stream.peek())) {
-      std::ignore = consumer(Token{
-          .type_ = Token::Type::String, .string_ = stream.fromMarked(0, 1)});
-      return stream.advance();
-    }
-    stream.advance();
-    if (utility::isUnicodeIndicator(stream.peek())) {
-      stream.shouldAdvance(utility::isHexadecimal, 4);
-    } else {
-      stream.advanceIfOnce(utility::canEscape);
-    }
-    if (!stream) {
-      return stdext::unexpected{ParseError{
-          "String must end with '\"'", stream.mark(), stream.position(),
-          Token::Type::Invalid}};
-    }
-  }
-  return stdext::unexpected{ParseError{
-      "Reached to the end while searching for string", stream.mark(),
-      stream.position(), Token::Type::Invalid}};
-}
-
-constexpr JsonStream consumeNumber(
-    JsonReader stream, Consumer auto& consumer) noexcept {
-  stream.markCurrent();
-  stream.advanceIfOnce(utility::isMinus);
-  if (!stream) {
-    return stdext::unexpected{ParseError{
-        "Expected a number following '-'", stream.mark(), stream.position(),
-        Token::Type::Invalid}};
-  }
-  // 0 should be followed by a dot(.) or exponent(e, E)
-  // in cases where it doesn't start with 0, we will consume all the digits
-  // and on 0 case we will only consume zero so that both cases can only be
-  // followed by the same characters
-  if (utility::isZero(stream.peek())) {
-    stream.advance();
-  } else if (stream.shouldAdvance(utility::isDigit)) {
-    stream.advanceWhile(utility::isDigit);
-  } else {
-    return stdext::unexpected{ParseError{
-        "Expected a number after '-'", stream.mark(), stream.position(),
-        Token::Type::Invalid}};
-  }
-  if (!stream) {
-    return stdext::unexpected{ParseError{
-        "Reached to end while reading a number", stream.mark(),
-        stream.position(), Token::Type::Invalid}};
-  }
-  // Now the integer part is over, let's see if there is any fractional part
-  if (utility::isDot(stream.peek())) {
-    stream.shouldAdvance(utility::isDigit);
-    if (!stream) {
-      stream.markCurrent();
-      return stdext::unexpected{ParseError{
-          "Expected a number following '.'", stream.mark(), stream.position(),
-          Token::Type::Invalid}};
-    }
-    stream.advanceWhile(utility::isDigit);
-    if (!stream) {
-      stream.markCurrent();
-      return stdext::unexpected{ParseError{
-          "Reached to end while reading a number", stream.mark(),
-          stream.position(), Token::Type::Invalid}};
-    }
-  }
-  if (utility::isExponent(stream.peek())) {
-    stream.shouldAdvance(utility::isDigit);
-    if (!stream) {
-      stream.markCurrent();
-      return stdext::unexpected{ParseError{
-          "Expected a number following '.'", stream.mark(), stream.position(),
-          Token::Type::Invalid}};
-    }
-    stream.advanceWhile(utility::isDigit);
-    if (!stream) {
-      stream.markCurrent();
-      return stdext::unexpected{ParseError{
-          "Reached to end while reading a number", stream.mark(),
-          stream.position(), Token::Type::Invalid}};
-    }
-  }
-  std::ignore =
-      consumer(Token{.type_ = Token::Type::Number, .string_ = stream});
-  return stream;
-}
-
-constexpr JsonStream consumeBoolean(
-    JsonReader stream, Consumer auto& consumer) noexcept {
-  stream.markCurrent();
-  if (stream.isNext("true")) {
-    stream.advance(4);
-    std::ignore =
-        consumer(Token{.type_ = Token::Type::Boolean, .string_ = stream});
-  } else if (stream.isNext("false")) {
-    stream.advance(5);
-    std::ignore =
-        consumer(Token{.type_ = Token::Type::Boolean, .string_ = stream});
-  } else {
-    return stdext::unexpected{ParseError{
-        "Programming error, code shouldn't be visiting here", stream.mark(),
-        stream.position(), Token::Type::Invalid}};
-  }
-  return stream;
-}
-
-constexpr JsonStream consumeNull(
-    JsonReader stream, Consumer auto& consumer) noexcept {
-  stream.markCurrent();
-  if (stream.isNext("null")) {
-    stream.advance(4);
-    std::ignore =
-        consumer(Token{.type_ = Token::Type::Null, .string_ = stream});
-  } else {
-    return stdext::unexpected{ParseError{
-        "Programming error, code shouldn't be visiting here", stream.mark(),
-        stream.position(), Token::Type::Invalid}};
-  }
-  return stream;
-}
-
-template<stdext::static_string jsonString>
-constexpr stdext::expected<std::size_t, std::string_view>
-tokenCount() noexcept {
-  struct TokenCounter {
-    std::size_t count_ = 0;
-
-    stdext::expected<void, std::string_view> operator()(Token) {
-      ++count_;
-      return {};
-    }
-  };
-
-  constexpr std::string_view str(jsonString.data(), jsonString.size());
-  TokenCounter counter;
-  if (auto result = consumeDocument(str, counter)) {
-    return counter.count_;
-  } else {
-    return stdext::unexpected(result.error());
-  }
-}
-
-template<stdext::static_string jsonString, std::size_t TokenCount>
-constexpr stdext::expected<std::array<Token, TokenCount>, std::string_view>
-getRawTokens() noexcept {
-  struct Tokenizer {
-    std::size_t counter_ = 0;
-    std::array<Token, TokenCount> tokens_;
-
-    stdext::expected<void, std::string_view> operator()(Token token) {
-      if (counter_ < TokenCount) {
-        tokens_[counter_++] = token;
-        return {};
+  inline constexpr CursorOrError operator()(JsonCursor cursor) {
+    for (auto type : allowedConsumerTypes) {
+      if (canConsume(cursor, type)) {
+        return selectConsumeFunction<StreamConsumer>(type)(cursor, consumer);
       }
-      return stdext::unexpected(
-          "There are more tokens than the indicated count");
     }
-  };
-
-  Tokenizer tokenizer;
-  constexpr std::string_view str(jsonString.data(), jsonString.size());
-  if (auto result = consumeDocument(str, tokenizer)) {
-    return tokenizer.tokens_;
-  } else {
-    return stdext::unexpected(result.error());
+    return errorInfo.makeError(cursor);
   }
+};
+
+template<Consumer StreamConsumer>
+struct DispatchToConsumer {
+  StreamConsumer& consumer;
+  ConsumerType allowedConsumerType;
+
+  inline constexpr CursorOrError operator()(JsonCursor cursor) {
+    auto consumerFunction =
+        selectConsumeFunction<StreamConsumer>(allowedConsumerType);
+    return consumerFunction(cursor, consumer);
+  }
+};
+
+template<Consumer StreamConsumer>
+struct Consume {
+  StreamConsumer& consumer;
+  Token::Type type = Token::Type::Invalid;
+  std::size_t markOffset = 0;
+  std::size_t currentOffset = 0;
+
+  inline constexpr CursorOrError operator()(JsonCursor cursor) {
+    return consumer(Token{
+               .string_ = fromMarked(cursor, markOffset, currentOffset),
+               .type_ = type})
+         | stdext::transform([cursor]() {
+             return cursor;
+           });
+  }
+};
+
+}  // namespace details::_parser
+
+constexpr CursorOrError consumeDocument(
+    JsonCursor cursor, Consumer auto& consumer) {
+  using namespace details::_parser;
+  return CursorOrError(cursor)
+       | stdext::and_then(AdvanceWhile{
+           .predicate = utility::isWhitespace,
+           .errorInfo =
+               {.message = "Empty document", .type = Token::Type::Invalid}})
+       | stdext::transform(&mark)
+       | stdext::and_then(SelectConsumer{
+           .consumer = consumer,
+           .allowedConsumerTypes = {ConsumerType::Object, ConsumerType::Array},
+           .errorInfo = {
+               .message = "Document must start with an object or an array",
+               .type = Token::Type::Invalid}});
 }
 
-template<std::size_t Size>
-constexpr std::array<bool, Size> transformNeeded(
-    const std::array<Token, Size>& tokens) noexcept {
-  std::array<bool, Size> ret;
-  for (std::size_t i = 0; i < Size; ++i) {
-    if (tokens[i].type_ == Token::Type::String
-        && utility::hasBackslash(tokens[i].string_)) {
-      ret[i] = true;
-    } else {
-      ret[i] = false;
+constexpr CursorOrError consumeObject(
+    JsonCursor cursor, Consumer auto& consumer) {
+  using namespace details::_parser;
+  return CursorOrError(cursor) | stdext::transform(&mark)
+       | stdext::and_then(ShouldAdvance{
+           .predicate = utility::isLeftBrace,
+           .errorInfo =
+               {.message = "Objects must begin with '{'",
+                .type = Token::Type::ObjectBegin}})
+       | stdext::and_then(
+             Consume{.consumer = consumer, .type = Token::Type::ObjectBegin})
+       | stdext::and_then(AdvanceWhile{
+           .predicate = utility::isWhitespace,
+           .errorInfo =
+               {.message = "Objects must end with '}'",
+                .type = Token::Type::ObjectEnd}})
+       | stdext::transform(&mark)
+       | stdext::and_then(DispatchToConsumer{
+           .consumer = consumer,
+           .allowedConsumerType = ConsumerType::KeyValues,
+       });
+}
+
+constexpr CursorOrError consumeKeyValuePairs(
+    JsonCursor cursor, Consumer auto& consumer) {
+  using namespace details::_parser;
+  auto cur = CursorOrError(cursor)
+           | stdext::and_then(AdvanceWhile{
+               .predicate = utility::isWhitespace,
+               .errorInfo = {
+                   .message = "Reached to end while looking for a key",
+                   .type = Token::Type::String}});
+  if (!cur.has_value()) {
+    return cur;
+  }
+  {
+    auto curEnd =
+        cur | stdext::transform(&mark)
+        | stdext::and_then(ShouldAdvance{.predicate = utility::isRightBrace});
+    if (curEnd.has_value()) {
+      return curEnd
+           | stdext::and_then(Consume{
+               .consumer = consumer,
+               .type = Token::Type::ObjectEnd,
+           });
     }
   }
+  auto curCont =
+      cur | stdext::transform(&mark)
+      | stdext::and_then(ShouldAdvance{
+          .predicate = utility::isQuote,
+          .errorInfo =
+              {.message =
+                   "Keys must be a string and thus must start with '\"' ",
+               .type = Token::Type::String}})
+      | stdext::transform(&mark)
+      | stdext::and_then(DispatchToConsumer{
+          .consumer = consumer, .allowedConsumerType = ConsumerType::String})
+      | stdext::and_then(AdvanceWhile{
+          .predicate = utility::isWhitespace,
+          .errorInfo =
+              {.message = "Reached to end while looking for colon",
+               .type = Token::Type::String}})
+      | stdext::transform(&mark)
+      | stdext::and_then(ShouldAdvance{
+          .predicate = utility::isColon,
+          .errorInfo =
+              {.message = "Keys must be separated by ':' from values",
+               .type = Token::Type::Invalid}})
+      | stdext::transform(&mark)
+      | stdext::and_then(AdvanceWhile{
+          .predicate = utility::isWhitespace,
+          .errorInfo =
+              {.message = "Reached to end while looking for a value",
+               .type = Token::Type::String}})
+      | stdext::transform(&mark)
+      | stdext::and_then(DispatchToConsumer{
+          .consumer = consumer, .allowedConsumerType = ConsumerType::Value})
+      | stdext::and_then(AdvanceWhile{
+          .predicate = utility::isWhitespace,
+          .errorInfo = {
+              .message = "Reached to end while looking for the end of object "
+                         "or a comma to separate key-value pairs",
+              .type = Token::Type::Invalid}});
+  if (!curCont.has_value()) {
+    return curCont;
+  }
+  auto curEnd = curCont | stdext::transform(&mark)
+              | stdext::and_then(ShouldAdvance{
+                  .predicate = utility::isRightBrace,
+                  .steps = 1,
+                  .errorInfo = ErrorInfo{}});
+  if (curEnd.has_value()) {
+    return curEnd
+         | stdext::and_then(Consume{
+             .consumer = consumer,
+             .type = Token::Type::ObjectEnd,
+         });
+  }
+  auto ret = curCont
+           | stdext::and_then(ShouldAdvance{
+               .predicate = utility::isComma,
+               .errorInfo =
+                   ErrorInfo{
+                       .message = "Key-value pairs must be a separated by ','",
+                       .type = Token::Type::Invalid}})
+           | stdext::transform(&mark)
+           | stdext::and_then(DispatchToConsumer{
+               .consumer = consumer,
+               .allowedConsumerType = ConsumerType::KeyValues});
   return ret;
 }
 
-template<const Token& token, bool needed>
-constexpr Token transformToken() {
-  if constexpr (!needed) {
-    return token;
+constexpr CursorOrError consumeArray(
+    JsonCursor cursor, Consumer auto& consumer) {
+  using namespace details::_parser;
+  return CursorOrError(cursor) | stdext::transform(&mark)
+       | stdext::and_then(ShouldAdvance{
+           .predicate = utility::isLeftBracket,
+           .errorInfo =
+               {.message = "Arrays must begin with '['",
+                .type = Token::Type::ArrayBegin}})
+       | stdext::and_then(
+             Consume{.consumer = consumer, .type = Token::Type::ArrayBegin})
+       | stdext::and_then(AdvanceWhile{
+           .predicate = utility::isWhitespace,
+           .errorInfo =
+               {.message = "Arrays must end with '}'",
+                .type = Token::Type::ArrayEnd}})
+       | stdext::transform(&mark)
+       | stdext::and_then(DispatchToConsumer{
+           .consumer = consumer,
+           .allowedConsumerType = ConsumerType::Elements});
+}
+
+constexpr CursorOrError consumeArrayElements(
+    JsonCursor cursor, Consumer auto& consumer) {
+  using namespace details::_parser;
+  auto cur = CursorOrError(cursor)
+           | stdext::and_then(AdvanceWhile{
+               .predicate = utility::isWhitespace,
+               .errorInfo = {
+                   .message = "Reached to end while looking for a value ",
+                   .type = Token::Type::Invalid}});
+  if (!cur.has_value()) {
+    return cur;
   }
-  return Token{
-      .string_ = parseString<STDEXT_AS_STATIC_STRING(token.string_)>(),
-      .type_ = token.type_};
-}
-
-template<
-    std::size_t Size,
-    const std::array<Token, Size>& rawTokens,
-    const std::array<bool, Size>& shouldTransform,
-    std::size_t... Indices>
-constexpr auto parsedTokens(std::index_sequence<Indices...>) {
-  return std::array<Token, Size>{
-      transformToken<rawTokens[Indices], shouldTransform[Indices]>()...};
-}
-
-template<stdext::static_string json>
-constexpr auto processedTokens() {
-  if constexpr (auto count = tokenCount<json>()) {
-    constexpr auto rawTokens = getRawTokens<json, count>();
-    return parsedTokens<>(std::make_index_sequence<count>());
-  } else {
-    return stdext::expected<void, ParseError>(
-        stdext::unexpected(count.error()));
+  {
+    auto curEnd =
+        cur | stdext::transform(&mark)
+        | stdext::and_then(ShouldAdvance{.predicate = utility::isRightBracket});
+    if (curEnd.has_value()) {
+      return curEnd
+           | stdext::and_then(Consume{
+               .consumer = consumer,
+               .type = Token::Type::ArrayEnd,
+           });
+    }
   }
+  auto curCont =
+      cur | stdext::transform(&mark)
+      | stdext::and_then(DispatchToConsumer{
+          .consumer = consumer, .allowedConsumerType = ConsumerType::Value})
+      | stdext::and_then(AdvanceWhile{
+          .predicate = utility::isWhitespace,
+          .reachingEndAsError = true,
+          .errorInfo = {
+              .message =
+                  "Reached to end while looking for comma or end of array ",
+              .type = Token::Type::Invalid}});
+  {
+    auto curEnd =
+        curCont | stdext::transform(&mark)
+        | stdext::and_then(ShouldAdvance{.predicate = utility::isRightBracket});
+    if (curEnd.has_value()) {
+      return curEnd
+           | stdext::and_then(Consume{
+               .consumer = consumer,
+               .type = Token::Type::ArrayEnd,
+           });
+    }
+  }
+  return curCont
+       | stdext::and_then(ShouldAdvance{
+           .predicate = utility::isComma,
+           .errorInfo =
+               {.message = "Values must be a separated by ','",
+                .type = Token::Type::Invalid}})
+       | stdext::transform(&mark)
+       | stdext::and_then(DispatchToConsumer{
+           .consumer = consumer,
+           .allowedConsumerType = ConsumerType::Elements});
 }
 
-}  // namespace details
+constexpr CursorOrError consumeValue(
+    JsonCursor cursor, Consumer auto& consumer) {
+  using namespace details::_parser;
+  auto cur = CursorOrError(cursor);
+  auto curString =
+      cur | stdext::and_then(ShouldAdvance{.predicate = utility::isQuote});
+  if (curString.has_value()) {
+    return curString | stdext::transform(&mark)
+         | stdext::and_then(DispatchToConsumer{
+             .consumer = consumer,
+             .allowedConsumerType = ConsumerType::String});
+  }
+
+  return cur | stdext::transform(&mark)
+       | stdext::and_then(SelectConsumer{
+           .consumer = consumer,
+           .allowedConsumerTypes =
+               {ConsumerType::Object, ConsumerType::Array, ConsumerType::Number,
+                ConsumerType::Boolean, ConsumerType::Null},
+           .errorInfo = {
+               .message = "Values can either be an object, an array, a string, "
+                          "a number, true, false or null",
+               .type = Token::Type::ArrayEnd}});
+}
+
+constexpr CursorOrError consumeString(
+    JsonCursor cursor, Consumer auto& consumer) {
+  using namespace details::_parser;
+  auto cur =
+      CursorOrError(cursor)
+      | stdext::and_then(AdvanceWhile{
+          .predicate = !(utility::isQuote || utility::isBackslash),
+          .reachingEndAsError = true,
+          .errorInfo = {
+              .message = "Reached to end while looking for an enclosing '\"' "
+                         "for the string",
+              .type = Token::Type::String}});
+  if (!cur.has_value()) {
+    return cur;
+  }
+  {
+    auto curEnd =
+        cur | stdext::and_then(ShouldAdvance{.predicate = utility::isQuote});
+    if (curEnd.has_value()) {
+      return curEnd
+           | stdext::and_then(Consume{
+               .consumer = consumer,
+               .type = Token::Type::String,
+               .currentOffset = 1  // avoids the quote at the end
+           });
+    }
+  }
+  auto curCont =
+      cur
+      | stdext::and_then(ShouldAdvance{
+          .predicate = utility::isBackslash,
+          .steps = 1,
+          .errorInfo = ErrorInfo{
+              .message =
+                  "Programming error, we shouldn't have an error here "}});
+  auto curEscape =
+      curCont
+      | stdext::and_then(ShouldAdvance{
+          .predicate = utility::canEscape && !utility::isUnicodeIndicator,
+          .steps = 1,
+      });
+  if (curEscape.has_value()) {
+    return curEscape
+         | stdext::and_then(DispatchToConsumer{
+             .consumer = consumer,
+             .allowedConsumerType = ConsumerType::String});
+  }
+  return curCont
+       | stdext::and_then(ShouldAdvance{
+           .predicate = utility::isUnicodeIndicator,
+           .errorInfo =
+               {.message = "Backslashes should be followed by one of the"
+                           "escapable characters: b,f,n,r,t,u,\\,/"},
+       })
+       | stdext::and_then(ShouldAdvance{
+           .predicate = utility::isHexadecimal,
+           .steps = 4,
+           .errorInfo =
+               {.message = "\\u should be followed by 4 hexadecimal digits "
+                           "for proper unicode escaping",
+                .type = Token::Type::String}})
+       | stdext::and_then(DispatchToConsumer{
+           .consumer = consumer, .allowedConsumerType = ConsumerType::String});
+}
+
+constexpr CursorOrError consumeNumber(
+    JsonCursor cursor, Consumer auto& consumer) {
+  using namespace details::_parser;
+  return CursorOrError(cursor) | stdext::and_then(&shouldSkipIntegerPart)
+       | stdext::and_then(&tryAdvanceFractionalPart)
+       | stdext::and_then(&tryAdvanceExponentialPart)
+       | stdext::and_then(
+             Consume{.consumer = consumer, .type = Token::Type::Number});
+}
+
+constexpr CursorOrError consumeBoolean(
+    JsonCursor cursor, Consumer auto& consumer) {
+  using namespace details::_parser;
+  return advanceBoolean(cursor)
+       | stdext::and_then(
+             Consume{.consumer = consumer, .type = Token::Type::Boolean});
+}
+
+constexpr CursorOrError consumeNull(
+    JsonCursor cursor, Consumer auto& consumer) {
+  using namespace details::_parser;
+  return advanceNull(cursor)
+       | stdext::and_then(
+             Consume{.consumer = consumer, .type = Token::Type::Null});
+}
 
 }  // namespace injectx::json::parser

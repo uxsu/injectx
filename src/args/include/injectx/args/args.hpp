@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <tuple>
 #include <type_traits>
@@ -22,6 +23,7 @@ constexpr auto call(Tuple t, Callable callable) {
 template<MemberPointer Callable>
 struct MemberPointerCallable {
   Callable callable;
+
   template<typename T>
   constexpr auto operator()(T t) {
     if constexpr (std::is_pointer_v<std::remove_reference_t<T>>) {
@@ -89,15 +91,15 @@ struct Arg {
   using CallableType = Callable;
   CallableType callable_;
 
-  constexpr Arg(Callable&& callable) : callable_(callable) {
+  constexpr Arg(Callable&& callable)
+      : callable_(callable) {
   }
 
   template<typename... Args>
   constexpr auto operator()(Args&&... args) const {
     if constexpr (arg_position != -1) {
       auto t = std::make_tuple(args...);
-      return details::call<decltype(t), CallableType, arg_position>(
-          t, callable_);
+      return details::call<arg_position>(t, callable_);
     } else {
       return callable_(args...);
     }
@@ -105,7 +107,8 @@ struct Arg {
 
   template<MemberPointer MemberPointerType>
   constexpr auto operator()(MemberPointerType callable) const {
-    return Arg<MemberPointerCallable<MemberPointerType>, arg_position, Context>(std::move(makeMemberPointerCallable(callable)));
+    return Arg<MemberPointerCallable<MemberPointerType>, arg_position, Context>(
+        std::move(makeMemberPointerCallable(callable)));
   }
 
   template<typename... Args>
@@ -289,3 +292,41 @@ constexpr auto v = details::makeArg<1, details::contexts::uvContextTag>();
 }  // namespace uv
 
 }  // namespace injectx::args
+
+/*
+End goal:
+  constexpr auto isWhiteSpace = arg = (arg == ' ' || arg == '\n' || arg == '\r'
+|| arg == '\t'); constexpr auto func = (x,y,z) = x + y + z; func(1,2,3); //works
+  constexpr auto reversed = (z,y,x) = func;
+  //reversed(3,2,1) is the same as func(1,2,3)
+
+  auto func2 = (x,y) = x * x + y * y;
+
+  // (func2 + fun)(1,2,3) == func(1,2,3) + func2(1,2)
+
+
+*/
+
+namespace injectx::args_alternative {
+namespace details {
+constexpr inline std::array<std::uint8_t, 8> argPositions = {
+    1, 1 << 1, 1 << 2, 1 << 3, 1 << 4, 1 << 5, 1 << 6, 1 << 7,
+};
+}  // namespace details
+
+struct function {
+  struct function_interface {};
+
+  template<typename Callable>
+  constexpr function(Callable&& callable) {
+  }
+};
+
+template<char id>
+struct arg : function {
+  constexpr arg()
+      : function(std::identity{}) {
+  }
+};
+
+}  // namespace injectx::args_alternative

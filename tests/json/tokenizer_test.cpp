@@ -2,57 +2,446 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <vector>
+#include <array>
 
 namespace injectx::json::tests {
+struct TokenCounter {
+  std::size_t count_ = 0;
+
+  constexpr stdext::expected<void, parser::ParseError> operator()(
+      parser::Token) {
+    ++count_;
+    return {};
+  }
+};
+
+template<std::size_t N>
+struct TokenExtractor {
+  std::array<parser::Token, N> tokens_{};
+  std::size_t index_ = 0;
+
+  constexpr stdext::expected<void, parser::ParseError> operator()(
+      parser::Token token) {
+    if (index_ >= N) {
+      return stdext::unexpected{
+          parser::ParseError{.message_ = "Programming error"}};
+    }
+    tokens_[index_++] = token;
+
+    return {};
+  }
+};
+
+template<auto jsonStringCreator>
+inline consteval auto getCounterAndExtractor() {
+  constexpr auto counter_result = std::invoke([]() {
+    TokenCounter counter;
+    parser::JsonCursor cursor{.json = jsonStringCreator()};
+    return parser::consumeDocument(cursor, counter)
+         | stdext::transform([&counter](auto) {
+             return counter;
+           });
+  });
+  constexpr auto counter =
+      counter_result.has_value() ? *counter_result : TokenCounter{};
+  constexpr auto extractor_result = std::invoke([&counter]() {
+    TokenExtractor<counter.count_> extractor;
+    parser::JsonCursor cursor{.json = jsonStringCreator()};
+    return parser::consumeDocument(cursor, extractor)
+         | stdext::transform([&extractor](auto) {
+             return extractor;
+           });
+  });
+  return std::pair{counter_result, extractor_result};
+}
 
 TEST_CASE("consumeDocument") {
-  struct TokenCounter {
-    std::size_t count_ = 0;
+  SECTION("empty-document") {
+    constexpr auto result = std::invoke([]() {
+      TokenCounter counter;
+      parser::JsonCursor cursor{.json = ""};
+      return parser::consumeDocument(cursor, counter);
+    });
+    STATIC_REQUIRE_FALSE(result.has_value());
+    STATIC_REQUIRE(result.error().message_ == "Empty document");
+  }
 
-    stdext::expected<void, std::string_view> operator()(parser::Token) {
-      ++count_;
-      return {};
-    }
-  };
-  TokenCounter counter;
-  struct TokenExtractor {
-    std::vector<parser::Token> tokens_{};
-
-    stdext::expected<void, std::string_view> operator()(parser::Token token) {
-      tokens_.push_back(token);
-      return {};
-    }
-  };
-  TokenExtractor extractor;
-  SECTION("Empty object") {
-    parser::details::JsonReader json("{}");
-    auto count_result = parser::details::consumeDocument(json, counter);
-    auto extractor_result = parser::details::consumeDocument(json, extractor);
-    REQUIRE(count_result.has_value());
-    REQUIRE(counter.count_ == 2);
-    REQUIRE(extractor_result.has_value());
-    REQUIRE(extractor.tokens_.size() == 2);
+  SECTION("empty-object") {
+    constexpr auto results = getCounterAndExtractor<[]() {
+      return "{}";
+    }>();
+    constexpr auto counter_result = results.first;
+    constexpr auto extractor_result = results.second;
+    STATIC_REQUIRE(counter_result.has_value());
+    constexpr auto counter = counter_result.value();
+    STATIC_REQUIRE(counter.count_ == 2);
+    STATIC_REQUIRE(extractor_result.has_value());
+    constexpr auto extractor = extractor_result.value();
+    STATIC_REQUIRE(extractor.index_ == 2);
     REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::ObjectBegin);
     REQUIRE(extractor.tokens_[0].string_ == "{");
     REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::ObjectEnd);
     REQUIRE(extractor.tokens_[1].string_ == "}");
-
   }
-  SECTION("Empty array") {
-    parser::details::JsonReader json("[]");
-    auto count_result = parser::details::consumeDocument(json, counter);
-    auto extractor_result = parser::details::consumeDocument(json, extractor);
-    REQUIRE(count_result.has_value());
-    REQUIRE(counter.count_ == 2);
-    REQUIRE(extractor_result.has_value());
-    REQUIRE(extractor.tokens_.size() == 2);
-    REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
-    REQUIRE(extractor.tokens_[0].string_ == "[");
-    REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::ArrayEnd);
-    REQUIRE(extractor.tokens_[1].string_ == "]");
+
+  SECTION("empty-array") {
+    constexpr auto results = getCounterAndExtractor<[]() {
+      return "[]";
+    }>();
+    constexpr auto counter_result = results.first;
+    constexpr auto extractor_result = results.second;
+    STATIC_REQUIRE(counter_result.has_value());
+    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE(counter.count_ == 2);
+    STATIC_REQUIRE(extractor_result.has_value());
+    constexpr auto extractor = *extractor_result;
+    STATIC_REQUIRE(extractor.tokens_.size() == 2);
+    STATIC_REQUIRE(
+        extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
+    STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
+    STATIC_REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::ArrayEnd);
+    STATIC_REQUIRE(extractor.tokens_[1].string_ == "]");
+  }
+
+  SECTION("simple-object") {
+    constexpr auto results = getCounterAndExtractor<[]() {
+      return R"(
+{
+      "key" : "value"
+}
+)";
+    }>();
+    constexpr auto counter_result = results.first;
+    constexpr auto extractor_result = results.second;
+    STATIC_REQUIRE(counter_result.has_value());
+    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE(counter.count_ == 4);
+    STATIC_REQUIRE(extractor_result.has_value());
+    constexpr auto extractor = *extractor_result;
+    STATIC_REQUIRE(extractor.tokens_.size() == 4);
+    STATIC_REQUIRE(
+        extractor.tokens_[0].type_ == parser::Token::Type::ObjectBegin);
+    STATIC_REQUIRE(extractor.tokens_[0].string_ == "{");
+    STATIC_REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[1].string_ == "key");
+    STATIC_REQUIRE(extractor.tokens_[2].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[2].string_ == "value");
+    STATIC_REQUIRE(
+        extractor.tokens_[3].type_ == parser::Token::Type::ObjectEnd);
+    STATIC_REQUIRE(extractor.tokens_[3].string_ == "}");
+  }
+  SECTION("simple-array-of-strings") {
+    constexpr auto results = getCounterAndExtractor<[]() {
+      return R"(
+[
+      "Some", "strings", "here", "for", "a", "test",
+      "unicode \u343A escape", "\b\f\n\r\t\""
+]
+)";
+    }>();
+    constexpr auto counter_result = results.first;
+    constexpr auto extractor_result = results.second;
+    STATIC_REQUIRE(counter_result.has_value());
+    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE(counter.count_ == 10);
+    STATIC_REQUIRE(extractor_result.has_value());
+    constexpr auto extractor = *extractor_result;
+    STATIC_REQUIRE(extractor.tokens_.size() == 10);
+    STATIC_REQUIRE(
+        extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
+    STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
+    STATIC_REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[1].string_ == "Some");
+    STATIC_REQUIRE(extractor.tokens_[2].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[2].string_ == "strings");
+    STATIC_REQUIRE(extractor.tokens_[3].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[3].string_ == "here");
+    STATIC_REQUIRE(extractor.tokens_[4].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[4].string_ == "for");
+    STATIC_REQUIRE(extractor.tokens_[5].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[5].string_ == "a");
+    STATIC_REQUIRE(extractor.tokens_[6].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[6].string_ == "test");
+    STATIC_REQUIRE(extractor.tokens_[7].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[7].string_ == R"(unicode \u343A escape)");
+    STATIC_REQUIRE(extractor.tokens_[8].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[8].string_ == R"(\b\f\n\r\t\")");
+    STATIC_REQUIRE(extractor.tokens_[9].type_ == parser::Token::Type::ArrayEnd);
+    STATIC_REQUIRE(extractor.tokens_[9].string_ == "]");
+  }
+  SECTION("simple-array-of-numbers") {
+    constexpr auto results = getCounterAndExtractor<[]() {
+      return R"(
+[
+      1, 2.5, 0.2, 0e123, 5e-1, 10e+23,
+      -1, -2.5, -0.2, -0e123, -5e-1, -10e+23
+]
+)";
+    }>();
+    constexpr auto counter_result = results.first;
+    constexpr auto extractor_result = results.second;
+    STATIC_REQUIRE(counter_result.has_value());
+    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE(counter.count_ == 14);
+    STATIC_REQUIRE(extractor_result.has_value());
+    constexpr auto extractor = *extractor_result;
+    STATIC_REQUIRE(extractor.tokens_.size() == 14);
+    STATIC_REQUIRE(
+        extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
+    STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
+    STATIC_REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[1].string_ == "1");
+    STATIC_REQUIRE(extractor.tokens_[2].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[2].string_ == "2.5");
+    STATIC_REQUIRE(extractor.tokens_[3].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[3].string_ == "0.2");
+    STATIC_REQUIRE(extractor.tokens_[4].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[4].string_ == "0e123");
+    STATIC_REQUIRE(extractor.tokens_[5].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[5].string_ == "5e-1");
+    STATIC_REQUIRE(extractor.tokens_[6].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[6].string_ == "10e+23");
+    STATIC_REQUIRE(extractor.tokens_[7].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[7].string_ == "-1");
+    STATIC_REQUIRE(extractor.tokens_[8].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[8].string_ == "-2.5");
+    STATIC_REQUIRE(extractor.tokens_[9].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[9].string_ == "-0.2");
+    STATIC_REQUIRE(extractor.tokens_[10].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[10].string_ == "-0e123");
+    STATIC_REQUIRE(extractor.tokens_[11].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[11].string_ == "-5e-1");
+    STATIC_REQUIRE(extractor.tokens_[12].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[12].string_ == "-10e+23");
+    STATIC_REQUIRE(
+        extractor.tokens_[13].type_ == parser::Token::Type::ArrayEnd);
+    STATIC_REQUIRE(extractor.tokens_[13].string_ == "]");
+  }
+  SECTION("simple-array-of-booleans-and-nulls") {
+    constexpr auto results = getCounterAndExtractor<[]() {
+      return R"(
+      [
+        true, null,       false, true, null,null, true,
+        false,
+                  false,
+                                    false,
+                 true,
+        null
+      ]
+    )";
+    }>();
+    constexpr auto counter_result = results.first;
+    constexpr auto extractor_result = results.second;
+    STATIC_REQUIRE(counter_result.has_value());
+    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE(counter.count_ == 14);
+    STATIC_REQUIRE(extractor_result.has_value());
+    constexpr auto extractor = *extractor_result;
+    STATIC_REQUIRE(extractor.tokens_.size() == 14);
+    STATIC_REQUIRE(
+        extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
+    STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
+    STATIC_REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::Boolean);
+    STATIC_REQUIRE(extractor.tokens_[1].string_ == "true");
+    STATIC_REQUIRE(extractor.tokens_[2].type_ == parser::Token::Type::Null);
+    STATIC_REQUIRE(extractor.tokens_[2].string_ == "null");
+    STATIC_REQUIRE(extractor.tokens_[3].type_ == parser::Token::Type::Boolean);
+    STATIC_REQUIRE(extractor.tokens_[3].string_ == "false");
+    STATIC_REQUIRE(extractor.tokens_[4].type_ == parser::Token::Type::Boolean);
+    STATIC_REQUIRE(extractor.tokens_[4].string_ == "true");
+    STATIC_REQUIRE(extractor.tokens_[5].type_ == parser::Token::Type::Null);
+    STATIC_REQUIRE(extractor.tokens_[5].string_ == "null");
+    STATIC_REQUIRE(extractor.tokens_[6].type_ == parser::Token::Type::Null);
+    STATIC_REQUIRE(extractor.tokens_[6].string_ == "null");
+    STATIC_REQUIRE(extractor.tokens_[7].type_ == parser::Token::Type::Boolean);
+    STATIC_REQUIRE(extractor.tokens_[7].string_ == "true");
+    STATIC_REQUIRE(extractor.tokens_[8].type_ == parser::Token::Type::Boolean);
+    STATIC_REQUIRE(extractor.tokens_[8].string_ == "false");
+    STATIC_REQUIRE(extractor.tokens_[9].type_ == parser::Token::Type::Boolean);
+    STATIC_REQUIRE(extractor.tokens_[9].string_ == "false");
+    STATIC_REQUIRE(extractor.tokens_[10].type_ == parser::Token::Type::Boolean);
+    STATIC_REQUIRE(extractor.tokens_[10].string_ == "false");
+    STATIC_REQUIRE(extractor.tokens_[11].type_ == parser::Token::Type::Boolean);
+    STATIC_REQUIRE(extractor.tokens_[11].string_ == "true");
+    STATIC_REQUIRE(extractor.tokens_[12].type_ == parser::Token::Type::Null);
+    STATIC_REQUIRE(extractor.tokens_[12].string_ == "null");
+    STATIC_REQUIRE(
+        extractor.tokens_[13].type_ == parser::Token::Type::ArrayEnd);
+    STATIC_REQUIRE(extractor.tokens_[13].string_ == "]");
+  }
+
+  SECTION("vulnerable-cases") {
+    constexpr auto results = getCounterAndExtractor<[]() {
+      return R"(
+      [
+    [], {}, [], [{}]
+      ]
+    )";
+    }>();
+
+    constexpr auto counter_result = results.first;
+    constexpr auto extractor_result = results.second;
+    STATIC_REQUIRE(counter_result.has_value());
+    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE(counter.count_ == 12);
+    STATIC_REQUIRE(extractor_result.has_value());
+    constexpr auto extractor = *extractor_result;
+    STATIC_REQUIRE(extractor.tokens_.size() == 12);
+    STATIC_REQUIRE(
+        extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
+    STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
+    STATIC_REQUIRE(
+        extractor.tokens_[1].type_ == parser::Token::Type::ArrayBegin);
+    STATIC_REQUIRE(extractor.tokens_[1].string_ == "[");
+    STATIC_REQUIRE(extractor.tokens_[2].type_ == parser::Token::Type::ArrayEnd);
+    STATIC_REQUIRE(extractor.tokens_[2].string_ == "]");
+    STATIC_REQUIRE(
+        extractor.tokens_[3].type_ == parser::Token::Type::ObjectBegin);
+    STATIC_REQUIRE(extractor.tokens_[3].string_ == "{");
+    STATIC_REQUIRE(
+        extractor.tokens_[4].type_ == parser::Token::Type::ObjectEnd);
+    STATIC_REQUIRE(extractor.tokens_[4].string_ == "}");
+    STATIC_REQUIRE(
+        extractor.tokens_[5].type_ == parser::Token::Type::ArrayBegin);
+    STATIC_REQUIRE(extractor.tokens_[5].string_ == "[");
+    STATIC_REQUIRE(extractor.tokens_[6].type_ == parser::Token::Type::ArrayEnd);
+    STATIC_REQUIRE(extractor.tokens_[6].string_ == "]");
+    STATIC_REQUIRE(
+        extractor.tokens_[7].type_ == parser::Token::Type::ArrayBegin);
+    STATIC_REQUIRE(extractor.tokens_[7].string_ == "[");
+    STATIC_REQUIRE(
+        extractor.tokens_[8].type_ == parser::Token::Type::ObjectBegin);
+    STATIC_REQUIRE(extractor.tokens_[8].string_ == "{");
+    STATIC_REQUIRE(
+        extractor.tokens_[9].type_ == parser::Token::Type::ObjectEnd);
+    STATIC_REQUIRE(extractor.tokens_[9].string_ == "}");
+    STATIC_REQUIRE(
+        extractor.tokens_[10].type_ == parser::Token::Type::ArrayEnd);
+    STATIC_REQUIRE(extractor.tokens_[10].string_ == "]");
+    STATIC_REQUIRE(
+        extractor.tokens_[11].type_ == parser::Token::Type::ArrayEnd);
+    STATIC_REQUIRE(extractor.tokens_[11].string_ == "]");
+  }
+
+  SECTION("Everything in an object") {
+    constexpr auto results = getCounterAndExtractor<[]() {
+      return R"({
+      "string": "string",
+      "number1": 19059043,
+      "number2": 0.439253095,
+      "number3": -0.00034230,
+      "number4": 0.439253095e+56,
+      "number5": -0.00034230e56,
+      "number6": -0.00034230e-56,
+      "number7": 140932e+56,
+      "number8": 140932e56,
+      "number9": 140932e-56,
+      "null": null,
+      "true": true,
+      "false": false,
+      "array" : [
+        "string", 3.14, null, true, false, {}, []
+      ]
+  })";
+    }>();
+
+    constexpr auto counter_result = results.first;
+    constexpr auto extractor_result = results.second;
+    STATIC_REQUIRE(counter_result.has_value());
+    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE(counter.count_ == 40);
+    STATIC_REQUIRE(extractor_result.has_value());
+    constexpr auto extractor = *extractor_result;
+    STATIC_REQUIRE(extractor.tokens_.size() == 40);
+    STATIC_REQUIRE(
+        extractor.tokens_[0].type_ == parser::Token::Type::ObjectBegin);
+    STATIC_REQUIRE(extractor.tokens_[0].string_ == "{");
+    STATIC_REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[1].string_ == "string");
+    STATIC_REQUIRE(extractor.tokens_[2].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[2].string_ == "string");
+    STATIC_REQUIRE(extractor.tokens_[3].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[3].string_ == "number1");
+    STATIC_REQUIRE(extractor.tokens_[4].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[4].string_ == "19059043");
+    STATIC_REQUIRE(extractor.tokens_[5].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[5].string_ == "number2");
+    STATIC_REQUIRE(extractor.tokens_[6].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[6].string_ == "0.439253095");
+    STATIC_REQUIRE(extractor.tokens_[7].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[7].string_ == "number3");
+    STATIC_REQUIRE(extractor.tokens_[8].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[8].string_ == "-0.00034230");
+    STATIC_REQUIRE(extractor.tokens_[9].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[9].string_ == "number4");
+    STATIC_REQUIRE(extractor.tokens_[10].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[10].string_ == "0.439253095e+56");
+    STATIC_REQUIRE(extractor.tokens_[11].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[11].string_ == "number5");
+    STATIC_REQUIRE(extractor.tokens_[12].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[12].string_ == "-0.00034230e56");
+    STATIC_REQUIRE(extractor.tokens_[13].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[13].string_ == "number6");
+    STATIC_REQUIRE(extractor.tokens_[14].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[14].string_ == "-0.00034230e-56");
+    STATIC_REQUIRE(extractor.tokens_[15].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[15].string_ == "number7");
+    STATIC_REQUIRE(extractor.tokens_[16].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[16].string_ == "140932e+56");
+    STATIC_REQUIRE(extractor.tokens_[17].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[17].string_ == "number8");
+    STATIC_REQUIRE(extractor.tokens_[18].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[18].string_ == "140932e56");
+    STATIC_REQUIRE(extractor.tokens_[19].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[19].string_ == "number9");
+    STATIC_REQUIRE(extractor.tokens_[20].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[20].string_ == "140932e-56");
+    STATIC_REQUIRE(extractor.tokens_[21].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[21].string_ == "null");
+    STATIC_REQUIRE(extractor.tokens_[22].type_ == parser::Token::Type::Null);
+    STATIC_REQUIRE(extractor.tokens_[22].string_ == "null");
+    STATIC_REQUIRE(extractor.tokens_[23].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[23].string_ == "true");
+    STATIC_REQUIRE(extractor.tokens_[24].type_ == parser::Token::Type::Boolean);
+    STATIC_REQUIRE(extractor.tokens_[24].string_ == "true");
+    STATIC_REQUIRE(extractor.tokens_[25].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[25].string_ == "false");
+    STATIC_REQUIRE(extractor.tokens_[26].type_ == parser::Token::Type::Boolean);
+    STATIC_REQUIRE(extractor.tokens_[26].string_ == "false");
+    STATIC_REQUIRE(extractor.tokens_[27].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[27].string_ == "array");
+    STATIC_REQUIRE(
+        extractor.tokens_[28].type_ == parser::Token::Type::ArrayBegin);
+    STATIC_REQUIRE(extractor.tokens_[28].string_ == "[");
+    STATIC_REQUIRE(extractor.tokens_[29].type_ == parser::Token::Type::String);
+    STATIC_REQUIRE(extractor.tokens_[29].string_ == "string");
+    STATIC_REQUIRE(extractor.tokens_[30].type_ == parser::Token::Type::Number);
+    STATIC_REQUIRE(extractor.tokens_[30].string_ == "3.14");
+    STATIC_REQUIRE(extractor.tokens_[31].type_ == parser::Token::Type::Null);
+    STATIC_REQUIRE(extractor.tokens_[31].string_ == "null");
+    STATIC_REQUIRE(extractor.tokens_[32].type_ == parser::Token::Type::Boolean);
+    STATIC_REQUIRE(extractor.tokens_[32].string_ == "true");
+    STATIC_REQUIRE(extractor.tokens_[33].type_ == parser::Token::Type::Boolean);
+    STATIC_REQUIRE(extractor.tokens_[33].string_ == "false");
+    STATIC_REQUIRE(
+        extractor.tokens_[34].type_ == parser::Token::Type::ObjectBegin);
+    STATIC_REQUIRE(extractor.tokens_[34].string_ == "{");
+    STATIC_REQUIRE(
+        extractor.tokens_[35].type_ == parser::Token::Type::ObjectEnd);
+    STATIC_REQUIRE(extractor.tokens_[35].string_ == "}");
+    STATIC_REQUIRE(
+        extractor.tokens_[36].type_ == parser::Token::Type::ArrayBegin);
+    STATIC_REQUIRE(extractor.tokens_[36].string_ == "[");
+    STATIC_REQUIRE(
+        extractor.tokens_[37].type_ == parser::Token::Type::ArrayEnd);
+    STATIC_REQUIRE(extractor.tokens_[37].string_ == "]");
+    STATIC_REQUIRE(
+        extractor.tokens_[38].type_ == parser::Token::Type::ArrayEnd);
+    STATIC_REQUIRE(extractor.tokens_[38].string_ == "]");
+    STATIC_REQUIRE(
+        extractor.tokens_[39].type_ == parser::Token::Type::ObjectEnd);
+    STATIC_REQUIRE(extractor.tokens_[39].string_ == "}");
   }
 }
-
 
 }  // namespace injectx::json::tests

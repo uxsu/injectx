@@ -9,8 +9,8 @@ namespace injectx::json::parser::utility {
 
 constexpr auto isNull = args::arg == '\0';
 
-constexpr auto isSpace = args::arg == ' ' || args::arg == '\t'
-                      || args::arg == '\n' || args::arg == '\r';
+constexpr auto isWhitespace = args::arg == ' ' || args::arg == '\t'
+                           || args::arg == '\n' || args::arg == '\r';
 
 constexpr auto isZero = args::arg == '0';
 constexpr auto isDigit = args::arg >= '0' && args::arg <= '9';
@@ -25,7 +25,7 @@ constexpr auto isRightBrace = args::arg == '}';
 constexpr auto isLeftBracket = args::arg == '[';
 constexpr auto isRightBracket = args::arg == ']';
 constexpr auto isColon = args::arg == ':';
-constexpr auto isComma = args::arg == '.';
+constexpr auto isComma = args::arg == ',';
 constexpr auto isBackslash = args::arg == '\\';
 constexpr auto isForwardslash = args::arg == '/';
 constexpr auto isUnicodeIndicator = args::arg == 'u';

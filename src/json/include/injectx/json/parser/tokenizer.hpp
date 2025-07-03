@@ -135,21 +135,30 @@ struct AdvanceWhile {
 };
 
 inline constexpr CursorOrError shouldSkipIntegerPart(JsonCursor cursor) {
+  bool negative = false;
   if (utility::isMinus(peek(cursor))) {
+    negative = true;
     advance(cursor);
   }
   if (utility::isZero(peek(cursor))) {
     advance(cursor);
     return cursor;
   }
-  return AdvanceWhile{
-      .predicate = utility::isDigit,
-      .errorInfo = {
-          .message = "'-' should be followed by a digit.",
-          .type = Token::Type::Number}}(cursor);
+  return CursorOrError(cursor)
+       | stdext::and_then(ShouldAdvance{
+           .predicate = utility::isDigit,
+           .errorInfo =
+               {.message = negative ? "'-' should be followed by a digit"
+                                    : "expected a digit or '-'",
+                .type = Token::Type::Number}})
+       | stdext::and_then(AdvanceWhile{
+           .predicate = utility::isDigit, .reachingEndAsError = false});
 }
 
 inline constexpr CursorOrError tryAdvanceFractionalPart(JsonCursor cursor) {
+  if (!canRead(cursor)) {
+    return cursor;
+  }
   if (!utility::isDot(peek(cursor))) {
     return cursor;
   }
@@ -161,13 +170,13 @@ inline constexpr CursorOrError tryAdvanceFractionalPart(JsonCursor cursor) {
                {.message = "'.' should be followed by a digit",
                 .type = Token::Type::Number}})
        | stdext::and_then(AdvanceWhile{
-           .predicate = utility::isDigit,
-           .errorInfo = {
-               .message = "Reached to end while parsing a number",
-               .type = Token::Type::Number}});
+           .predicate = utility::isDigit, .reachingEndAsError = false});
 }
 
 inline constexpr CursorOrError tryAdvanceExponentialPart(JsonCursor cursor) {
+  if (!canRead(cursor)) {
+    return cursor;
+  }
   if (!utility::isExponent(peek(cursor))) {
     return cursor;
   }
@@ -181,10 +190,7 @@ inline constexpr CursorOrError tryAdvanceExponentialPart(JsonCursor cursor) {
                {.message = "'e(+/-)' or 'E(+/-)' should be followed by a digit",
                 .type = Token::Type::Number}})
        | stdext::and_then(AdvanceWhile{
-           .predicate = utility::isDigit,
-           .errorInfo = {
-               .message = "Reached to end while parsing a number",
-               .type = Token::Type::Number}});
+           .predicate = utility::isDigit, .reachingEndAsError = false});
 }
 
 inline constexpr CursorOrError advanceBoolean(JsonCursor cursor) {

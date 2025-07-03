@@ -4,6 +4,29 @@
 
 #include <array>
 
+#define STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(Counter, Extractor, Json, Type) \
+  constexpr auto results = getCounterAndExtractor<Type, []() {               \
+    return Json;                                                             \
+  }>();                                                                      \
+  constexpr auto counter_result = results.first;                             \
+  constexpr auto extractor_result = results.second;                          \
+  STATIC_REQUIRE(counter_result.has_value());                                \
+  constexpr auto Counter = counter_result.value();                           \
+  STATIC_REQUIRE(extractor_result.has_value());                              \
+  constexpr auto Extractor = extractor_result.value();
+
+#define STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(            \
+    Counter, Extractor, Json, Type)                            \
+  constexpr auto results = getCounterAndExtractor<Type, []() { \
+    return Json;                                               \
+  }>();                                                        \
+  constexpr auto counter_result = results.first;               \
+  constexpr auto extractor_result = results.second;            \
+  STATIC_REQUIRE_FALSE(counter_result.has_value());            \
+  constexpr auto Counter = counter_result.error();             \
+  STATIC_REQUIRE_FALSE(extractor_result.has_value());          \
+  constexpr auto Extractor = extractor_result.error();
+
 namespace injectx::json::tests {
 struct TokenCounter {
   std::size_t count_ = 0;
@@ -32,12 +55,13 @@ struct TokenExtractor {
   }
 };
 
-template<auto jsonStringCreator>
+template<parser::ConsumerType consumerType, auto jsonStringCreator>
 inline consteval auto getCounterAndExtractor() {
   constexpr auto counter_result = std::invoke([]() {
     TokenCounter counter;
     parser::JsonCursor cursor{.json = jsonStringCreator()};
-    return parser::consumeDocument(cursor, counter)
+    return parser::selectConsumeFunction<TokenCounter>(consumerType)(
+               cursor, counter)
          | stdext::transform([&counter](auto) {
              return counter;
            });
@@ -45,9 +69,11 @@ inline consteval auto getCounterAndExtractor() {
   constexpr auto counter =
       counter_result.has_value() ? *counter_result : TokenCounter{};
   constexpr auto extractor_result = std::invoke([&counter]() {
-    TokenExtractor<counter.count_> extractor;
+    using Extractor = TokenExtractor<counter.count_>;
+    Extractor extractor;
     parser::JsonCursor cursor{.json = jsonStringCreator()};
-    return parser::consumeDocument(cursor, extractor)
+    return parser::selectConsumeFunction<Extractor>(consumerType)(
+               cursor, extractor)
          | stdext::transform([&extractor](auto) {
              return extractor;
            });
@@ -55,47 +81,47 @@ inline consteval auto getCounterAndExtractor() {
   return std::pair{counter_result, extractor_result};
 }
 
+TEST_CASE("consumeNull") {
+  SECTION("positive") {
+    constexpr auto json = "null";
+    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
+        counter, extractor, json, parser::ConsumerType::Null);
+    STATIC_REQUIRE(counter.count_ == 1);
+    STATIC_REQUIRE(extractor.index_ == 1);
+    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::Null);
+    STATIC_REQUIRE(extractor.tokens_[0].string_ == "null");
+  }
+}
+
 TEST_CASE("consumeDocument") {
   SECTION("empty-document") {
-    constexpr auto result = std::invoke([]() {
-      TokenCounter counter;
-      parser::JsonCursor cursor{.json = ""};
-      return parser::consumeDocument(cursor, counter);
-    });
-    STATIC_REQUIRE_FALSE(result.has_value());
-    STATIC_REQUIRE(result.error().message_ == "Empty document");
+    constexpr auto json = "";
+    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(
+        counter_error, extractor_error, json, parser::ConsumerType::Document);
+    STATIC_REQUIRE(counter_error.message_ == "Empty document");
+    STATIC_REQUIRE(extractor_error.message_ == "Empty document");
   }
 
   SECTION("empty-object") {
-    constexpr auto results = getCounterAndExtractor<[]() {
-      return "{}";
-    }>();
-    constexpr auto counter_result = results.first;
-    constexpr auto extractor_result = results.second;
-    STATIC_REQUIRE(counter_result.has_value());
-    constexpr auto counter = counter_result.value();
+    constexpr auto json = "{}";
+    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
+        counter, extractor, json, parser::ConsumerType::Document);
     STATIC_REQUIRE(counter.count_ == 2);
-    STATIC_REQUIRE(extractor_result.has_value());
-    constexpr auto extractor = extractor_result.value();
     STATIC_REQUIRE(extractor.index_ == 2);
-    REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::ObjectBegin);
-    REQUIRE(extractor.tokens_[0].string_ == "{");
-    REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::ObjectEnd);
-    REQUIRE(extractor.tokens_[1].string_ == "}");
+    STATIC_REQUIRE(
+        extractor.tokens_[0].type_ == parser::Token::Type::ObjectBegin);
+    STATIC_REQUIRE(extractor.tokens_[0].string_ == "{");
+    STATIC_REQUIRE(
+        extractor.tokens_[1].type_ == parser::Token::Type::ObjectEnd);
+    STATIC_REQUIRE(extractor.tokens_[1].string_ == "}");
   }
 
   SECTION("empty-array") {
-    constexpr auto results = getCounterAndExtractor<[]() {
-      return "[]";
-    }>();
-    constexpr auto counter_result = results.first;
-    constexpr auto extractor_result = results.second;
-    STATIC_REQUIRE(counter_result.has_value());
-    constexpr auto counter = *counter_result;
+    constexpr auto json = "[]";
+    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
+        counter, extractor, json, parser::ConsumerType::Document);
     STATIC_REQUIRE(counter.count_ == 2);
-    STATIC_REQUIRE(extractor_result.has_value());
-    constexpr auto extractor = *extractor_result;
-    STATIC_REQUIRE(extractor.tokens_.size() == 2);
+    STATIC_REQUIRE(extractor.index_ == 2);
     STATIC_REQUIRE(
         extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
     STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
@@ -104,21 +130,15 @@ TEST_CASE("consumeDocument") {
   }
 
   SECTION("simple-object") {
-    constexpr auto results = getCounterAndExtractor<[]() {
-      return R"(
+    constexpr auto json = R"(
 {
       "key" : "value"
 }
 )";
-    }>();
-    constexpr auto counter_result = results.first;
-    constexpr auto extractor_result = results.second;
-    STATIC_REQUIRE(counter_result.has_value());
-    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
+        counter, extractor, json, parser::ConsumerType::Document);
     STATIC_REQUIRE(counter.count_ == 4);
-    STATIC_REQUIRE(extractor_result.has_value());
-    constexpr auto extractor = *extractor_result;
-    STATIC_REQUIRE(extractor.tokens_.size() == 4);
+    STATIC_REQUIRE(extractor.index_ == 4);
     STATIC_REQUIRE(
         extractor.tokens_[0].type_ == parser::Token::Type::ObjectBegin);
     STATIC_REQUIRE(extractor.tokens_[0].string_ == "{");
@@ -130,23 +150,18 @@ TEST_CASE("consumeDocument") {
         extractor.tokens_[3].type_ == parser::Token::Type::ObjectEnd);
     STATIC_REQUIRE(extractor.tokens_[3].string_ == "}");
   }
+
   SECTION("simple-array-of-strings") {
-    constexpr auto results = getCounterAndExtractor<[]() {
-      return R"(
+    constexpr auto json = R"(
 [
       "Some", "strings", "here", "for", "a", "test",
       "unicode \u343A escape", "\b\f\n\r\t\""
 ]
 )";
-    }>();
-    constexpr auto counter_result = results.first;
-    constexpr auto extractor_result = results.second;
-    STATIC_REQUIRE(counter_result.has_value());
-    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
+        counter, extractor, json, parser::ConsumerType::Document);
     STATIC_REQUIRE(counter.count_ == 10);
-    STATIC_REQUIRE(extractor_result.has_value());
-    constexpr auto extractor = *extractor_result;
-    STATIC_REQUIRE(extractor.tokens_.size() == 10);
+    STATIC_REQUIRE(extractor.index_ == 10);
     STATIC_REQUIRE(
         extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
     STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
@@ -169,23 +184,18 @@ TEST_CASE("consumeDocument") {
     STATIC_REQUIRE(extractor.tokens_[9].type_ == parser::Token::Type::ArrayEnd);
     STATIC_REQUIRE(extractor.tokens_[9].string_ == "]");
   }
+
   SECTION("simple-array-of-numbers") {
-    constexpr auto results = getCounterAndExtractor<[]() {
-      return R"(
+    constexpr auto json = R"(
 [
       1, 2.5, 0.2, 0e123, 5e-1, 10e+23,
       -1, -2.5, -0.2, -0e123, -5e-1, -10e+23
 ]
 )";
-    }>();
-    constexpr auto counter_result = results.first;
-    constexpr auto extractor_result = results.second;
-    STATIC_REQUIRE(counter_result.has_value());
-    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
+        counter, extractor, json, parser::ConsumerType::Document);
     STATIC_REQUIRE(counter.count_ == 14);
-    STATIC_REQUIRE(extractor_result.has_value());
-    constexpr auto extractor = *extractor_result;
-    STATIC_REQUIRE(extractor.tokens_.size() == 14);
+    STATIC_REQUIRE(extractor.index_ == 14);
     STATIC_REQUIRE(
         extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
     STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
@@ -217,9 +227,9 @@ TEST_CASE("consumeDocument") {
         extractor.tokens_[13].type_ == parser::Token::Type::ArrayEnd);
     STATIC_REQUIRE(extractor.tokens_[13].string_ == "]");
   }
+
   SECTION("simple-array-of-booleans-and-nulls") {
-    constexpr auto results = getCounterAndExtractor<[]() {
-      return R"(
+    constexpr auto json = R"(
       [
         true, null,       false, true, null,null, true,
         false,
@@ -229,15 +239,10 @@ TEST_CASE("consumeDocument") {
         null
       ]
     )";
-    }>();
-    constexpr auto counter_result = results.first;
-    constexpr auto extractor_result = results.second;
-    STATIC_REQUIRE(counter_result.has_value());
-    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
+        counter, extractor, json, parser::ConsumerType::Document);
     STATIC_REQUIRE(counter.count_ == 14);
-    STATIC_REQUIRE(extractor_result.has_value());
-    constexpr auto extractor = *extractor_result;
-    STATIC_REQUIRE(extractor.tokens_.size() == 14);
+    STATIC_REQUIRE(extractor.index_ == 14);
     STATIC_REQUIRE(
         extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
     STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
@@ -271,22 +276,15 @@ TEST_CASE("consumeDocument") {
   }
 
   SECTION("vulnerable-cases") {
-    constexpr auto results = getCounterAndExtractor<[]() {
-      return R"(
+    constexpr auto json = R"(
       [
     [], {}, [], [{}]
       ]
     )";
-    }>();
-
-    constexpr auto counter_result = results.first;
-    constexpr auto extractor_result = results.second;
-    STATIC_REQUIRE(counter_result.has_value());
-    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
+        counter, extractor, json, parser::ConsumerType::Document);
     STATIC_REQUIRE(counter.count_ == 12);
-    STATIC_REQUIRE(extractor_result.has_value());
-    constexpr auto extractor = *extractor_result;
-    STATIC_REQUIRE(extractor.tokens_.size() == 12);
+    STATIC_REQUIRE(extractor.index_ == 12);
     STATIC_REQUIRE(
         extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
     STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
@@ -324,8 +322,7 @@ TEST_CASE("consumeDocument") {
   }
 
   SECTION("Everything in an object") {
-    constexpr auto results = getCounterAndExtractor<[]() {
-      return R"({
+    constexpr auto json = R"({
       "string": "string",
       "number1": 19059043,
       "number2": 0.439253095,
@@ -343,16 +340,11 @@ TEST_CASE("consumeDocument") {
         "string", 3.14, null, true, false, {}, []
       ]
   })";
-    }>();
 
-    constexpr auto counter_result = results.first;
-    constexpr auto extractor_result = results.second;
-    STATIC_REQUIRE(counter_result.has_value());
-    constexpr auto counter = *counter_result;
+    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
+        counter, extractor, json, parser::ConsumerType::Document);
     STATIC_REQUIRE(counter.count_ == 40);
-    STATIC_REQUIRE(extractor_result.has_value());
-    constexpr auto extractor = *extractor_result;
-    STATIC_REQUIRE(extractor.tokens_.size() == 40);
+    STATIC_REQUIRE(extractor.index_ == 40);
     STATIC_REQUIRE(
         extractor.tokens_[0].type_ == parser::Token::Type::ObjectBegin);
     STATIC_REQUIRE(extractor.tokens_[0].string_ == "{");

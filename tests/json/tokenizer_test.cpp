@@ -31,6 +31,47 @@
   constexpr auto Extractor = extractor_result.error();         \
   (void)Extractor;
 
+#define STATIC_REQUIRE_NULL_TEST_PASS(NULLTEXT)                              \
+  {                                                                          \
+    constexpr auto json = NULLTEXT;                                          \
+    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(                                    \
+        counter, extractor, json, parser::ConsumerType::Null);               \
+    STATIC_REQUIRE(counter.count_ == 1);                                     \
+    STATIC_REQUIRE(extractor.index_ == 1);                                   \
+    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::Null); \
+    STATIC_REQUIRE(extractor.tokens_[0].string_ == "null");                  \
+  }
+
+#define STATIC_REQUIRE_NULL_TEST_FAIL(NULLTEXT, MESSAGE)                   \
+  {                                                                        \
+    constexpr auto json = NULLTEXT;                                        \
+    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(                            \
+        counter_error, extractor_error, json, parser::ConsumerType::Null); \
+    STATIC_REQUIRE(counter_error.message_ == MESSAGE);                     \
+    STATIC_REQUIRE(extractor_error.message_ == MESSAGE);                   \
+  }
+
+#define STATIC_REQUIRE_BOOLEAN_TEST_PASS(BOOLEAN, EXPECTED)          \
+  {                                                                  \
+    constexpr auto json = BOOLEAN;                                   \
+    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(                            \
+        counter, extractor, json, parser::ConsumerType::Boolean);    \
+    STATIC_REQUIRE(counter.count_ == 1);                             \
+    STATIC_REQUIRE(extractor.index_ == 1);                           \
+    STATIC_REQUIRE(                                                  \
+        extractor.tokens_[0].type_ == parser::Token::Type::Boolean); \
+    STATIC_REQUIRE(extractor.tokens_[0].string_ == EXPECTED);        \
+  }
+
+#define STATIC_REQUIRE_BOOLEAN_TEST_FAIL(BOOLEAN, MESSAGE)                    \
+  {                                                                           \
+    constexpr auto json = BOOLEAN;                                            \
+    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(                               \
+        counter_error, extractor_error, json, parser::ConsumerType::Boolean); \
+    STATIC_REQUIRE(counter_error.message_ == MESSAGE);                        \
+    STATIC_REQUIRE(extractor_error.message_ == MESSAGE);                      \
+  }
+
 #define STATIC_REQUIRE_NUMBER_TEST_PASS(NUMBER, EXPECTED)                      \
   {                                                                            \
     constexpr auto json = NUMBER;                                              \
@@ -69,6 +110,26 @@
         counter_error, extractor_error, json, parser::ConsumerType::String); \
     STATIC_REQUIRE(counter_error.message_ == MESSAGE);                       \
     STATIC_REQUIRE(extractor_error.message_ == MESSAGE);                     \
+  }
+
+#define STATIC_REQUIRE_VALUE_TEST_PASS(VALUE, TYPE, EXPECTED)                \
+  {                                                                          \
+    constexpr auto json = VALUE;                                             \
+    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(                                    \
+        counter, extractor, json, parser::ConsumerType::Value);              \
+    STATIC_REQUIRE(counter.count_ == 1);                                     \
+    STATIC_REQUIRE(extractor.index_ == 1);                                   \
+    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::TYPE); \
+    STATIC_REQUIRE(extractor.tokens_[0].string_ == EXPECTED);                \
+  }
+
+#define STATIC_REQUIRE_VALUE_TEST_FAIL(VALUE, MESSAGE)                      \
+  {                                                                         \
+    constexpr auto json = VALUE;                                            \
+    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(                             \
+        counter_error, extractor_error, json, parser::ConsumerType::Value); \
+    STATIC_REQUIRE(counter_error.message_ == MESSAGE);                      \
+    STATIC_REQUIRE(extractor_error.message_ == MESSAGE);                    \
   }
 
 namespace injectx::json::tests {
@@ -126,107 +187,60 @@ inline consteval auto getCounterAndExtractor() {
 }
 
 TEST_CASE("consumeNull") {
-  SECTION("positive-exact") {
-    constexpr auto json = "null";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Null);
-    STATIC_REQUIRE(counter.count_ == 1);
-    STATIC_REQUIRE(extractor.index_ == 1);
-    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::Null);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "null");
+  SECTION("positive") {
+    STATIC_REQUIRE_NULL_TEST_PASS("null");
+    STATIC_REQUIRE_NULL_TEST_PASS("null  ");
+    STATIC_REQUIRE_NULL_TEST_PASS("nullkdlsakl ");
+    STATIC_REQUIRE_NULL_TEST_PASS("nullnull");
+    STATIC_REQUIRE_NULL_TEST_PASS("null,");
   }
-  SECTION("positive-extra") {
-    constexpr auto json = "null   ";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Null);
-    STATIC_REQUIRE(counter.count_ == 1);
-    STATIC_REQUIRE(extractor.index_ == 1);
-    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::Null);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "null");
-  }
-  SECTION("failure-not-starting-with-n") {
-    constexpr auto json = "  null";
-    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(
-        counter_error, extractor_error, json, parser::ConsumerType::Null);
-    STATIC_REQUIRE(
-        counter_error.message_ == "Expected null but couldn't parse it");
-    STATIC_REQUIRE(
-        extractor_error.message_ == "Expected null but couldn't parse it");
-  }
-  SECTION("failure-starting-with-n") {
-    constexpr auto json = "nul l";
-    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(
-        counter_error, extractor_error, json, parser::ConsumerType::Null);
-    STATIC_REQUIRE(
-        counter_error.message_ == "Expected null but couldn't parse it");
-    STATIC_REQUIRE(
-        extractor_error.message_ == "Expected null but couldn't parse it");
+  SECTION("negative") {
+    STATIC_REQUIRE_NULL_TEST_FAIL(
+        "nul l", "Expected null but couldn't parse it");
+    STATIC_REQUIRE_NULL_TEST_FAIL("nul", "Expected null but couldn't parse it");
+    STATIC_REQUIRE_NULL_TEST_FAIL(
+        " nullkdlsakl ", "Expected null but couldn't parse it");
+    STATIC_REQUIRE_NULL_TEST_FAIL(
+        "nnullnull", "Expected null but couldn't parse it");
+    STATIC_REQUIRE_NULL_TEST_FAIL(
+        ",null,", "Expected null but couldn't parse it");
   }
 }
 
 TEST_CASE("consumeBoolean") {
   SECTION("positive-exact-true") {
-    constexpr auto json = "true";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Boolean);
-    STATIC_REQUIRE(counter.count_ == 1);
-    STATIC_REQUIRE(extractor.index_ == 1);
-    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "true");
+    STATIC_REQUIRE_BOOLEAN_TEST_PASS("true", "true");
+    STATIC_REQUIRE_BOOLEAN_TEST_PASS("true  ", "true");
+    STATIC_REQUIRE_BOOLEAN_TEST_PASS("truekdlsakl ", "true");
+    STATIC_REQUIRE_BOOLEAN_TEST_PASS("truetrue", "true");
+    STATIC_REQUIRE_BOOLEAN_TEST_PASS("true,", "true");
+    STATIC_REQUIRE_BOOLEAN_TEST_PASS("false", "false");
+    STATIC_REQUIRE_BOOLEAN_TEST_PASS("false  ", "false");
+    STATIC_REQUIRE_BOOLEAN_TEST_PASS("falsekdlsakl ", "false");
+    STATIC_REQUIRE_BOOLEAN_TEST_PASS("falsefalse", "false");
+    STATIC_REQUIRE_BOOLEAN_TEST_PASS("false,", "false");
   }
-  SECTION("positive-exact-false") {
-    constexpr auto json = "false";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Boolean);
-    STATIC_REQUIRE(counter.count_ == 1);
-    STATIC_REQUIRE(extractor.index_ == 1);
-    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "false");
-  }
-  SECTION("positive-extra-true") {
-    constexpr auto json = "truefalse";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Boolean);
-    STATIC_REQUIRE(counter.count_ == 1);
-    STATIC_REQUIRE(extractor.index_ == 1);
-    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "true");
-  }
-  SECTION("positive-extra-false") {
-    constexpr auto json = "falsetrue";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Boolean);
-    STATIC_REQUIRE(counter.count_ == 1);
-    STATIC_REQUIRE(extractor.index_ == 1);
-    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "false");
-  }
-  SECTION("failure-not-starting-with-t-or-f") {
-    constexpr auto json = "boolean";
-    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(
-        counter_error, extractor_error, json, parser::ConsumerType::Boolean);
-    STATIC_REQUIRE(
-        counter_error.message_ == "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE(
-        extractor_error.message_ == "Expected a boolean but couldn't parse it");
-  }
-  SECTION("failure-starting-with-t") {
-    constexpr auto json = "truue";
-    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(
-        counter_error, extractor_error, json, parser::ConsumerType::Boolean);
-    STATIC_REQUIRE(
-        counter_error.message_ == "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE(
-        extractor_error.message_ == "Expected a boolean but couldn't parse it");
-  }
-  SECTION("failure-starting-with-f") {
-    constexpr auto json = "ffalse";
-    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(
-        counter_error, extractor_error, json, parser::ConsumerType::Boolean);
-    STATIC_REQUIRE(
-        counter_error.message_ == "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE(
-        extractor_error.message_ == "Expected a boolean but couldn't parse it");
+  SECTION("negative") {
+    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
+        " true", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
+        "ttrue  ", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
+        "ftruekdlsakl ", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
+        "trutrue", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
+        "truue,", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
+        " false", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
+        "ffalse  ", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
+        "tfalsekdlsakl ", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
+        "falsfalse", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
+        "falsse,", "Expected a boolean but couldn't parse it");
   }
 }
 
@@ -310,47 +324,228 @@ TEST_CASE("consumeNumber") {
 
 TEST_CASE("consumeString") {
   SECTION("positive") {
-    STATIC_REQUIRE_STRING_TEST_PASS(R"(")", R"()");
-    STATIC_REQUIRE_STRING_TEST_PASS(R"(8934523")", R"(8934523)");
-    STATIC_REQUIRE_STRING_TEST_PASS(R"(\"8934523")", R"(\"8934523)");
+    STATIC_REQUIRE_STRING_TEST_PASS(R"("")", R"()");
+    STATIC_REQUIRE_STRING_TEST_PASS(R"("8934523")", R"(8934523)");
+
+    STATIC_REQUIRE_STRING_TEST_PASS(R"("\"8934523")", R"(\"8934523)");
     STATIC_REQUIRE_STRING_TEST_PASS(
-        R"(\"89   lfewkl 34523" we are not interested in what happens after ending quote)",
+        R"("\"89   lfewkl 34523" we are not interested in what happens after
+            ending quote)",
         R"(\"89   lfewkl 34523)");
     STATIC_REQUIRE_STRING_TEST_PASS(
-        R"(\\ \/ \b \f \r \t \n \u432AD" kbrejgiw)",
+        R"("\\ \/ \b \f \r \t \n \u432AD" kbrejgiw)",
+        R"(\\ \/ \b \f \r \t \n \u432AD)");
+  }
+
+  SECTION("negative") {
+    STATIC_REQUIRE_STRING_TEST_FAIL(
+        R"( 8934523)", "Strings must begin with '\"'");
+    STATIC_REQUIRE_STRING_TEST_FAIL(
+        R"("8934523)",
+        "Reached to end while looking for an enclosing '\"' "
+        "for the string");
+    STATIC_REQUIRE_STRING_TEST_FAIL(
+        R"("8934523\")",
+        "Reached to end while looking for an enclosing '\"' "
+        "for the string");
+    STATIC_REQUIRE_STRING_TEST_FAIL(
+        R"("\x")",
+        "Backslashes should be followed by one of the"
+        "escapable characters: \",b,f,n,r,t,u,\\,/");
+    STATIC_REQUIRE_STRING_TEST_FAIL(
+        R"("\v")",
+        "Backslashes should be followed by one of the"
+        "escapable characters: \",b,f,n,r,t,u,\\,/");
+    STATIC_REQUIRE_STRING_TEST_FAIL(
+        R"("\u")",
+        "\\u should be followed by 4 hexadecimal digits "
+        "for proper unicode escaping");
+    STATIC_REQUIRE_STRING_TEST_FAIL(
+        R"("\u123")",
+        "\\u should be followed by 4 hexadecimal digits "
+        "for proper unicode escaping");
+    STATIC_REQUIRE_STRING_TEST_FAIL(
+        R"("\u231G")",
+        "\\u should be followed by 4 hexadecimal digits "
+        "for proper unicode escaping");
+    STATIC_REQUIRE_STRING_TEST_FAIL(
+        R"("\u231x")",
+        "\\u should be followed by 4 hexadecimal digits "
+        "for proper unicode escaping");
+  }
+}
+
+TEST_CASE("consumeValue") {
+  SECTION("positive") {
+    STATIC_REQUIRE_VALUE_TEST_PASS("null", Null, "null");
+    STATIC_REQUIRE_VALUE_TEST_PASS("null  ", Null, "null");
+    STATIC_REQUIRE_VALUE_TEST_PASS("nullkdlsakl ", Null, "null");
+    STATIC_REQUIRE_VALUE_TEST_PASS("nullnull", Null, "null");
+    STATIC_REQUIRE_VALUE_TEST_PASS("null,", Null, "null");
+    STATIC_REQUIRE_VALUE_TEST_PASS("true", Boolean, "true");
+    STATIC_REQUIRE_VALUE_TEST_PASS("true  ", Boolean, "true");
+    STATIC_REQUIRE_VALUE_TEST_PASS("truekdlsakl ", Boolean, "true");
+    STATIC_REQUIRE_VALUE_TEST_PASS("truetrue", Boolean, "true");
+    STATIC_REQUIRE_VALUE_TEST_PASS("true,", Boolean, "true");
+    STATIC_REQUIRE_VALUE_TEST_PASS("false", Boolean, "false");
+    STATIC_REQUIRE_VALUE_TEST_PASS("false  ", Boolean, "false");
+    STATIC_REQUIRE_VALUE_TEST_PASS("falsekdlsakl ", Boolean, "false");
+    STATIC_REQUIRE_VALUE_TEST_PASS("falsefalse", Boolean, "false");
+    STATIC_REQUIRE_VALUE_TEST_PASS("false,", Boolean, "false");
+    STATIC_REQUIRE_VALUE_TEST_PASS("8934523", Number, "8934523");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-9053290 ", Number, "-9053290");
+    STATIC_REQUIRE_VALUE_TEST_PASS("0\n", Number, "0");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-0%", Number, "-0");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        "8934523995834958493589435849582930432589230859320890,", Number,
+        "8934523995834958493589435849582930432589230859320890");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        "-8934523995834958493589435849582930432589230859320890]", Number,
+        "-8934523995834958493589435849582930432589230859320890");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        "654.932049320592095302}", Number, "654.932049320592095302");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        "-905329532.395034859328{", Number, "-905329532.395034859328");
+    STATIC_REQUIRE_VALUE_TEST_PASS("0.9538958293$", Number, "0.9538958293");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        "-0.8594358698239\t", Number, "-0.8594358698239");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        "90543905960950350259023592309.905238592385293502359802\b", Number,
+        "90543905960950350259023592309.905238592385293502359802");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        "-90543905960950350259023592309.905238592385293502359802", Number,
+        "-90543905960950350259023592309.905238592385293502359802");
+    STATIC_REQUIRE_VALUE_TEST_PASS("654e32", Number, "654e32");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-654e32", Number, "-654e32");
+    STATIC_REQUIRE_VALUE_TEST_PASS("654e-32", Number, "654e-32");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-654e-32", Number, "-654e-32");
+    STATIC_REQUIRE_VALUE_TEST_PASS("654e+32", Number, "654e+32");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-654e+32", Number, "-654e+32");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-654e+0", Number, "-654e+0");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-654e-0", Number, "-654e-0");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-0e-0", Number, "-0e-0");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-0e+0", Number, "-0e+0");
+    STATIC_REQUIRE_VALUE_TEST_PASS("0e-0", Number, "0e-0");
+    STATIC_REQUIRE_VALUE_TEST_PASS("0e+0", Number, "0e+0");
+    STATIC_REQUIRE_VALUE_TEST_PASS("654E32", Number, "654E32");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-654E32", Number, "-654E32");
+    STATIC_REQUIRE_VALUE_TEST_PASS("654E-32", Number, "654E-32");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-654E-32", Number, "-654E-32");
+    STATIC_REQUIRE_VALUE_TEST_PASS("654E+32", Number, "654E+32");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-654E+32", Number, "-654E+32");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-654E+0", Number, "-654E+0");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-654E-0", Number, "-654E-0");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-0E-0", Number, "-0E-0");
+    STATIC_REQUIRE_VALUE_TEST_PASS("-0E+0", Number, "-0E+0");
+    STATIC_REQUIRE_VALUE_TEST_PASS("0E-0", Number, "0E-0");
+    STATIC_REQUIRE_VALUE_TEST_PASS("0E+0", Number, "0E+0");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        "48394328.5049053e332", Number, "48394328.5049053e332");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        "-48394328.5049053e32", Number, "-48394328.5049053e32");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        "48394328.5049053e+38", Number, "48394328.5049053e+38");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        "48394328.5049053e-38", Number, "48394328.5049053e-38");
+    STATIC_REQUIRE_VALUE_TEST_PASS(R"("")", String, R"()");
+    STATIC_REQUIRE_VALUE_TEST_PASS(R"("8934523")", String, R"(8934523)");
+
+    STATIC_REQUIRE_VALUE_TEST_PASS(R"("\"8934523")", String, R"(\"8934523)");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        R"("\"89   lfewkl 34523" we are not interested in what happens after
+            ending quote)",
+        String, R"(\"89   lfewkl 34523)");
+    STATIC_REQUIRE_VALUE_TEST_PASS(
+        R"("\\ \/ \b \f \r \t \n \u432AD" kbrejgiw)", String,
         R"(\\ \/ \b \f \r \t \n \u432AD)");
   }
   SECTION("negative") {
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"(8934523)",
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "nul l", "Expected null but couldn't parse it");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "nul", "Expected null but couldn't parse it");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        " nullkdlsakl ",
+        "Values can either be an object, an array, a string, a number, true, "
+        "false or null");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "nnullnull", "Expected null but couldn't parse it");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        ",null,",
+        "Values can either be an object, an array, a string, a number, true, "
+        "false or null");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        " true",
+        "Values can either be an object, an array, a string, a number, true, "
+        "false or null");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "ttrue  ", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "ftruekdlsakl ", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "trutrue", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "truue,", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        " false",
+        "Values can either be an object, an array, a string, a number, true, "
+        "false or null");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "ffalse  ", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "tfalsekdlsakl ", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "falsfalse", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "falsse,", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "+954839593",
+        "Values can either be an object, an array, a string, a number, true, "
+        "false or null");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "-.94032", "'-' should be followed by a digit");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "-0.e123", "'.' should be followed by a digit");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "-0.1Ea123", "'e(+/-)' or 'E(+/-)' should be followed by a digit");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "-0.1e+a123", "'e(+/-)' or 'E(+/-)' should be followed by a digit");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        "-0.1E-a123", "'e(+/-)' or 'E(+/-)' should be followed by a digit");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        R"( 8934523)",
+        "Values can either be an object, an array, a string, a number, true, "
+        "false or null");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        R"("8934523)",
         "Reached to end while looking for an enclosing '\"' "
         "for the string");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"(8934523\")",
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        R"("8934523\")",
         "Reached to end while looking for an enclosing '\"' "
         "for the string");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"(\x")",
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        R"("\x")",
         "Backslashes should be followed by one of the"
-        "escapable characters: b,f,n,r,t,u,\\,/");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"(\v")",
+        "escapable characters: \",b,f,n,r,t,u,\\,/");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        R"("\v")",
         "Backslashes should be followed by one of the"
-        "escapable characters: b,f,n,r,t,u,\\,/");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"(\u")",
+        "escapable characters: \",b,f,n,r,t,u,\\,/");
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        R"("\u")",
         "\\u should be followed by 4 hexadecimal digits "
         "for proper unicode escaping");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"(\u123")",
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        R"("\u123")",
         "\\u should be followed by 4 hexadecimal digits "
         "for proper unicode escaping");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"(\u231G")",
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        R"("\u231G")",
         "\\u should be followed by 4 hexadecimal digits "
         "for proper unicode escaping");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"(\u231x")",
+    STATIC_REQUIRE_VALUE_TEST_FAIL(
+        R"("\u231x")",
         "\\u should be followed by 4 hexadecimal digits "
         "for proper unicode escaping");
   }

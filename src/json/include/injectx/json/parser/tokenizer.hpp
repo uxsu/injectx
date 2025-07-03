@@ -219,7 +219,6 @@ inline constexpr CursorOrError advanceNull(JsonCursor cursor) {
       .type = Token::Type::Null}
       .makeError(cursor);
 }
-
 }  // namespace details::_parser
 
 template<typename T>
@@ -244,6 +243,8 @@ inline constexpr CursorOrError consumeValue(JsonCursor, Consumer auto&);
 
 inline constexpr CursorOrError consumeString(JsonCursor, Consumer auto&);
 
+inline constexpr CursorOrError consumeStringContent(JsonCursor, Consumer auto&);
+
 inline constexpr CursorOrError consumeNumber(JsonCursor, Consumer auto&);
 
 inline constexpr CursorOrError consumeBoolean(JsonCursor, Consumer auto&);
@@ -258,6 +259,7 @@ enum class ConsumerType {
   Elements,
   Value,
   String,
+  StringContent,
   Number,
   Boolean,
   Null
@@ -281,6 +283,8 @@ static constexpr auto ConsumeFunctions = std::array{
         ConsumerType::Value, &consumeValue<StreamConsumer>},
     std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
         ConsumerType::String, &consumeString<StreamConsumer>},
+    std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
+        ConsumerType::StringContent, &consumeStringContent<StreamConsumer>},
     std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
         ConsumerType::Number, &consumeNumber<StreamConsumer>},
     std::pair<ConsumerType, ConsumeFunction<StreamConsumer>>{
@@ -324,6 +328,8 @@ inline constexpr bool canConsume(JsonCursor cursor, ConsumerType type) {
           || canConsume(cursor, ConsumerType::Null);
     case ConsumerType::String:
       return utility::isQuote(c);
+    case ConsumerType::StringContent:
+      return true;
     case ConsumerType::Number:
       return utility::canNumberStartWith(c);
     case ConsumerType::Boolean:
@@ -380,6 +386,33 @@ struct Consume {
   }
 };
 
+inline constexpr CursorOrError advanceUnicode(JsonCursor cursor) {
+  return ShouldAdvance{
+      .predicate = utility::isHexadecimal,
+      .steps = 4,
+      .errorInfo = {
+          .message = "\\u should be followed by 4 hexadecimal digits "
+                     "for proper unicode escaping",
+          .type = Token::Type::String}}(cursor);
+}
+
+inline constexpr CursorOrError advanceBackslash(JsonCursor cursor) {
+  if (!canRead(cursor)) {
+    return cursor;
+  }
+  if (utility::isUnicodeIndicator(peek(cursor))) {
+    advance(cursor);
+    return advanceUnicode(cursor);
+  } else {
+    return CursorOrError(cursor)
+         | stdext::and_then(ShouldAdvance{
+             .predicate = utility::canEscape,
+             .errorInfo = {
+                 .message = "Backslashes should be followed by one of the"
+                            "escapable characters: \",b,f,n,r,t,u,\\,/",
+                 .type = Token::Type::String}});
+  }
+}
 }  // namespace details::_parser
 
 constexpr CursorOrError consumeDocument(
@@ -448,13 +481,6 @@ constexpr CursorOrError consumeKeyValuePairs(
   }
   auto curCont =
       cur | stdext::transform(&mark)
-      | stdext::and_then(ShouldAdvance{
-          .predicate = utility::isQuote,
-          .errorInfo =
-              {.message =
-                   "Keys must be a string and thus must start with '\"' ",
-               .type = Token::Type::String}})
-      | stdext::transform(&mark)
       | stdext::and_then(DispatchToConsumer{
           .consumer = consumer, .allowedConsumerType = ConsumerType::String})
       | stdext::and_then(AdvanceWhile{
@@ -596,22 +622,13 @@ constexpr CursorOrError consumeArrayElements(
 constexpr CursorOrError consumeValue(
     JsonCursor cursor, Consumer auto& consumer) {
   using namespace details::_parser;
-  auto cur = CursorOrError(cursor);
-  auto curString =
-      cur | stdext::and_then(ShouldAdvance{.predicate = utility::isQuote});
-  if (curString.has_value()) {
-    return curString | stdext::transform(&mark)
-         | stdext::and_then(DispatchToConsumer{
-             .consumer = consumer,
-             .allowedConsumerType = ConsumerType::String});
-  }
-
-  return cur | stdext::transform(&mark)
+  return CursorOrError(cursor) | stdext::transform(&mark)
        | stdext::and_then(SelectConsumer{
            .consumer = consumer,
            .allowedConsumerTypes =
-               {ConsumerType::Object, ConsumerType::Array, ConsumerType::Number,
-                ConsumerType::Boolean, ConsumerType::Null},
+               {ConsumerType::Object, ConsumerType::Array, ConsumerType::String,
+                ConsumerType::Number, ConsumerType::Boolean,
+                ConsumerType::Null},
            .errorInfo = {
                .message = "Values can either be an object, an array, a string, "
                           "a number, true, false or null",
@@ -619,6 +636,21 @@ constexpr CursorOrError consumeValue(
 }
 
 constexpr CursorOrError consumeString(
+    JsonCursor cursor, Consumer auto& consumer) {
+  using namespace details::_parser;
+  return CursorOrError(cursor)
+       | stdext::and_then(ShouldAdvance{
+           .predicate = utility::isQuote,
+           .errorInfo =
+               {.message = "Strings must begin with '\"'",
+                .type = Token::Type::String}})
+       | stdext::transform(&mark)
+       | stdext::and_then(DispatchToConsumer{
+           .consumer = consumer,
+           .allowedConsumerType = ConsumerType::StringContent});
+}
+
+constexpr CursorOrError consumeStringContent(
     JsonCursor cursor, Consumer auto& consumer) {
   using namespace details::_parser;
   auto cur =
@@ -633,54 +665,21 @@ constexpr CursorOrError consumeString(
   if (!cur.has_value()) {
     return cur;
   }
-  {
-    auto curEnd =
-        cur | stdext::and_then(ShouldAdvance{.predicate = utility::isQuote});
-    if (curEnd.has_value()) {
-      return curEnd
-           | stdext::and_then(Consume{
-               .consumer = consumer,
-               .type = Token::Type::String,
-               .currentOffset = 1  // avoids the quote at the end
-           });
-    }
-  }
-  auto curCont =
-      cur
-      | stdext::and_then(ShouldAdvance{
-          .predicate = utility::isBackslash,
-          .steps = 1,
-          .errorInfo = ErrorInfo{
-              .message =
-                  "Programming error, we shouldn't have an error here "}});
-  auto curEscape =
-      curCont
-      | stdext::and_then(ShouldAdvance{
-          .predicate = utility::canEscape && !utility::isUnicodeIndicator,
-          .steps = 1,
-      });
-  if (curEscape.has_value()) {
-    return curEscape
-         | stdext::and_then(DispatchToConsumer{
+  cursor = *cur;
+  if (utility::isQuote(peek(cursor))) {
+    advance(cursor);
+    return CursorOrError(cursor)
+         | stdext::and_then(Consume{
              .consumer = consumer,
-             .allowedConsumerType = ConsumerType::String});
+             .type = Token::Type::String,
+             .currentOffset = 1  // avoids the quote at the end
+         });
   }
-  return curCont
-       | stdext::and_then(ShouldAdvance{
-           .predicate = utility::isUnicodeIndicator,
-           .errorInfo =
-               {.message = "Backslashes should be followed by one of the"
-                           "escapable characters: b,f,n,r,t,u,\\,/"},
-       })
-       | stdext::and_then(ShouldAdvance{
-           .predicate = utility::isHexadecimal,
-           .steps = 4,
-           .errorInfo =
-               {.message = "\\u should be followed by 4 hexadecimal digits "
-                           "for proper unicode escaping",
-                .type = Token::Type::String}})
+  advance(cursor);
+  return CursorOrError(cursor) | stdext::and_then(&advanceBackslash)
        | stdext::and_then(DispatchToConsumer{
-           .consumer = consumer, .allowedConsumerType = ConsumerType::String});
+           .consumer = consumer,
+           .allowedConsumerType = ConsumerType::StringContent});
 }
 
 constexpr CursorOrError consumeNumber(

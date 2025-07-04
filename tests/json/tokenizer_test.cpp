@@ -2,895 +2,1327 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <array>
-
-#define STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(Counter, Extractor, Json, Type) \
-  constexpr auto results = getCounterAndExtractor<Type, []() {               \
-    return Json;                                                             \
-  }>();                                                                      \
-  constexpr auto counter_result = results.first;                             \
-  constexpr auto extractor_result = results.second;                          \
-  STATIC_REQUIRE(counter_result.has_value());                                \
-  constexpr auto Counter = counter_result.value();                           \
-  (void)Counter;                                                             \
-  STATIC_REQUIRE(extractor_result.has_value());                              \
-  constexpr auto Extractor = extractor_result.value();                       \
-  (void)Extractor;
-
-#define STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(            \
-    Counter, Extractor, Json, Type)                            \
-  constexpr auto results = getCounterAndExtractor<Type, []() { \
-    return Json;                                               \
-  }>();                                                        \
-  constexpr auto counter_result = results.first;               \
-  constexpr auto extractor_result = results.second;            \
-  STATIC_REQUIRE_FALSE(counter_result.has_value());            \
-  constexpr auto Counter = counter_result.error();             \
-  (void)Counter;                                               \
-  STATIC_REQUIRE_FALSE(extractor_result.has_value());          \
-  constexpr auto Extractor = extractor_result.error();         \
-  (void)Extractor;
-
-#define STATIC_REQUIRE_NULL_TEST_PASS(NULLTEXT)                              \
-  {                                                                          \
-    constexpr auto json = NULLTEXT;                                          \
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(                                    \
-        counter, extractor, json, parser::ConsumerType::Null);               \
-    STATIC_REQUIRE(counter.count_ == 1);                                     \
-    STATIC_REQUIRE(extractor.index_ == 1);                                   \
-    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::Null); \
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "null");                  \
-  }
-
-#define STATIC_REQUIRE_NULL_TEST_FAIL(NULLTEXT, MESSAGE)                   \
-  {                                                                        \
-    constexpr auto json = NULLTEXT;                                        \
-    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(                            \
-        counter_error, extractor_error, json, parser::ConsumerType::Null); \
-    STATIC_REQUIRE(counter_error.message_ == MESSAGE);                     \
-    STATIC_REQUIRE(extractor_error.message_ == MESSAGE);                   \
-  }
-
-#define STATIC_REQUIRE_BOOLEAN_TEST_PASS(BOOLEAN, EXPECTED)          \
-  {                                                                  \
-    constexpr auto json = BOOLEAN;                                   \
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(                            \
-        counter, extractor, json, parser::ConsumerType::Boolean);    \
-    STATIC_REQUIRE(counter.count_ == 1);                             \
-    STATIC_REQUIRE(extractor.index_ == 1);                           \
-    STATIC_REQUIRE(                                                  \
-        extractor.tokens_[0].type_ == parser::Token::Type::Boolean); \
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == EXPECTED);        \
-  }
-
-#define STATIC_REQUIRE_BOOLEAN_TEST_FAIL(BOOLEAN, MESSAGE)                    \
-  {                                                                           \
-    constexpr auto json = BOOLEAN;                                            \
-    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(                               \
-        counter_error, extractor_error, json, parser::ConsumerType::Boolean); \
-    STATIC_REQUIRE(counter_error.message_ == MESSAGE);                        \
-    STATIC_REQUIRE(extractor_error.message_ == MESSAGE);                      \
-  }
-
-#define STATIC_REQUIRE_NUMBER_TEST_PASS(NUMBER, EXPECTED)                      \
-  {                                                                            \
-    constexpr auto json = NUMBER;                                              \
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(                                      \
-        counter, extractor, json, parser::ConsumerType::Number);               \
-    STATIC_REQUIRE(counter.count_ == 1);                                       \
-    STATIC_REQUIRE(extractor.index_ == 1);                                     \
-    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::Number); \
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == EXPECTED);                  \
-  }
-
-#define STATIC_REQUIRE_NUMBER_TEST_FAIL(NUMBER, MESSAGE)                     \
-  {                                                                          \
-    constexpr auto json = NUMBER;                                            \
-    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(                              \
-        counter_error, extractor_error, json, parser::ConsumerType::Number); \
-    STATIC_REQUIRE(counter_error.message_ == MESSAGE);                       \
-    STATIC_REQUIRE(extractor_error.message_ == MESSAGE);                     \
-  }
-
-#define STATIC_REQUIRE_STRING_TEST_PASS(STRING, EXPECTED)                      \
-  {                                                                            \
-    constexpr auto json = STRING;                                              \
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(                                      \
-        counter, extractor, json, parser::ConsumerType::String);               \
-    STATIC_REQUIRE(counter.count_ == 1);                                       \
-    STATIC_REQUIRE(extractor.index_ == 1);                                     \
-    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::String); \
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == EXPECTED);                  \
-  }
-
-#define STATIC_REQUIRE_STRING_TEST_FAIL(STRING, MESSAGE)                     \
-  {                                                                          \
-    constexpr auto json = STRING;                                            \
-    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(                              \
-        counter_error, extractor_error, json, parser::ConsumerType::String); \
-    STATIC_REQUIRE(counter_error.message_ == MESSAGE);                       \
-    STATIC_REQUIRE(extractor_error.message_ == MESSAGE);                     \
-  }
-
-#define STATIC_REQUIRE_VALUE_TEST_PASS(VALUE, TYPE, EXPECTED)                \
-  {                                                                          \
-    constexpr auto json = VALUE;                                             \
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(                                    \
-        counter, extractor, json, parser::ConsumerType::Value);              \
-    STATIC_REQUIRE(counter.count_ == 1);                                     \
-    STATIC_REQUIRE(extractor.index_ == 1);                                   \
-    STATIC_REQUIRE(extractor.tokens_[0].type_ == parser::Token::Type::TYPE); \
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == EXPECTED);                \
-  }
-
-#define STATIC_REQUIRE_VALUE_TEST_FAIL(VALUE, MESSAGE)                      \
-  {                                                                         \
-    constexpr auto json = VALUE;                                            \
-    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(                             \
-        counter_error, extractor_error, json, parser::ConsumerType::Value); \
-    STATIC_REQUIRE(counter_error.message_ == MESSAGE);                      \
-    STATIC_REQUIRE(extractor_error.message_ == MESSAGE);                    \
-  }
+#include <vector>
 
 namespace injectx::json::tests {
-struct TokenCounter {
-  std::size_t count_ = 0;
-
-  constexpr stdext::expected<void, parser::ParseError> operator()(
-      parser::Token) {
-    ++count_;
-    return {};
-  }
-};
-
-template<std::size_t N>
 struct TokenExtractor {
-  std::array<parser::Token, N> tokens_{};
-  std::size_t index_ = 0;
+  std::vector<parser::Token> tokens_{};
 
   constexpr stdext::expected<void, parser::ParseError> operator()(
       parser::Token token) {
-    if (index_ >= N) {
-      return stdext::unexpected{
-          parser::ParseError{.message_ = "Programming error"}};
-    }
-    tokens_[index_++] = token;
+    tokens_.push_back(token);
 
     return {};
   }
 };
 
-template<parser::ConsumerType consumerType, auto jsonStringCreator>
-inline consteval auto getCounterAndExtractor() {
-  constexpr auto counter_result = std::invoke([]() {
-    TokenCounter counter;
-    parser::JsonCursor cursor{.json = jsonStringCreator()};
-    return parser::selectConsumeFunction<TokenCounter>(consumerType)(
-               cursor, counter)
-         | stdext::transform([&counter](auto) {
-             return counter;
-           });
-  });
-  constexpr auto counter =
-      counter_result.has_value() ? *counter_result : TokenCounter{};
-  constexpr auto extractor_result = std::invoke([&counter]() {
-    using Extractor = TokenExtractor<counter.count_>;
-    Extractor extractor;
-    parser::JsonCursor cursor{.json = jsonStringCreator()};
-    return parser::selectConsumeFunction<Extractor>(consumerType)(
-               cursor, extractor)
-         | stdext::transform([&extractor](auto) {
-             return extractor;
-           });
-  });
-  return std::pair{counter_result, extractor_result};
+using ConsumeResultExpactation =
+    std::vector<std::pair<parser::Token::Type, std::string_view>>;
+
+inline constexpr stdext::expected<void, std::string_view> requiresPass(
+    parser::ConsumerType consumerType,
+    std::string_view json,
+    const ConsumeResultExpactation& expectation) {
+  TokenExtractor extractor;
+  auto extractor_result = parser::selectConsumeFunction<TokenExtractor>(
+      consumerType)({.json = json}, extractor);
+  if (!extractor_result.has_value()) {
+    return stdext::unexpected{extractor_result.error().message_};
+  }
+  auto size = extractor.tokens_.size();
+  if (size != expectation.size()) {
+    return stdext::unexpected{"Size mismatch!"};
+  }
+  for (std::size_t i = 0; i < size; ++i) {
+    if (extractor.tokens_[i].type_ != expectation[i].first) {
+      return stdext::unexpected{"Type mismatch!"};
+    }
+    if (extractor.tokens_[i].string_ != expectation[i].second) {
+      return stdext::unexpected{"String mismatch!"};
+    }
+  }
+
+  return {};
+}
+
+inline constexpr stdext::expected<void, std::string_view> requiresFail(
+    parser::ConsumerType consumerType,
+    std::string_view json,
+    std::string_view expectedError) {
+  TokenExtractor extractor;
+  auto extractor_result = parser::selectConsumeFunction<TokenExtractor>(
+      consumerType)({.json = json}, extractor);
+  if (extractor_result.has_value()) {
+    return stdext::unexpected{"Unexpectedly extracted tokens!"};
+  }
+  if (extractor_result.error().message_ != expectedError) {
+    return stdext::unexpected{"Error mismatch"};
+  }
+  return {};
+}
+
+inline constexpr auto requiresPassNull(std::string_view json) {
+  return requiresPass(
+      parser::ConsumerType::Null, json, {{parser::Token::Type::Null, "null"}});
+}
+
+inline constexpr auto requiresFailNull(std::string_view json) {
+  return requiresFail(
+      parser::ConsumerType::Null, json, "Expected null but couldn't parse it");
+}
+
+inline constexpr auto requiresPassBoolean(
+    std::string_view json, bool expectation) {
+  using namespace std::string_view_literals;
+  return requiresPass(
+      parser::ConsumerType::Boolean, json,
+      {{parser::Token::Type::Boolean, expectation ? "true"sv : "false"sv}});
+}
+
+inline constexpr auto requiresFailBoolean(std::string_view json) {
+  return requiresFail(
+      parser::ConsumerType::Boolean, json,
+      "Expected a boolean but couldn't parse it");
+}
+
+inline constexpr auto requiresPassNumber(
+    std::string_view json, std::string_view expectation) {
+  using namespace std::string_view_literals;
+  return requiresPass(
+      parser::ConsumerType::Number, json,
+      {{parser::Token::Type::Number, expectation}});
+}
+
+inline constexpr auto requiresFailNumber(
+    std::string_view json, std::string_view errorExpactation) {
+  return requiresFail(parser::ConsumerType::Number, json, errorExpactation);
+}
+
+inline constexpr auto requiresPassString(
+    std::string_view json, std::string_view expectation) {
+  using namespace std::string_view_literals;
+  return requiresPass(
+      parser::ConsumerType::String, json,
+      {{parser::Token::Type::String, expectation}});
+}
+
+inline constexpr auto requiresFailString(
+    std::string_view json, std::string_view errorExpactation) {
+  return requiresFail(parser::ConsumerType::String, json, errorExpactation);
+}
+
+inline constexpr auto requiresPassValue(
+    std::string_view json,
+    parser::Token::Type type,
+    std::string_view expectation) {
+  using namespace std::string_view_literals;
+  return requiresPass(parser::ConsumerType::Value, json, {{type, expectation}});
+}
+
+inline constexpr auto requiresFailValue(
+    std::string_view json, std::string_view errorExpactation) {
+  return requiresFail(parser::ConsumerType::Value, json, errorExpactation);
+}
+
+inline constexpr auto requiresPassArray(
+    std::string_view json, const ConsumeResultExpactation& expectation) {
+  using namespace std::string_view_literals;
+  return requiresPass(parser::ConsumerType::Array, json, expectation);
+}
+
+inline constexpr auto requiresFailArray(
+    std::string_view json, std::string_view errorExpactation) {
+  return requiresFail(parser::ConsumerType::Array, json, errorExpactation);
+}
+
+inline constexpr auto requiresPassObject(
+    std::string_view json, const ConsumeResultExpactation& expectation) {
+  using namespace std::string_view_literals;
+  return requiresPass(parser::ConsumerType::Object, json, expectation);
+}
+
+inline constexpr auto requiresFailObject(
+    std::string_view json, std::string_view errorExpactation) {
+  return requiresFail(parser::ConsumerType::Object, json, errorExpactation);
+}
+
+inline constexpr auto requiresPassDocument(
+    std::string_view json, const ConsumeResultExpactation& expectation) {
+  using namespace std::string_view_literals;
+  return requiresPass(parser::ConsumerType::Document, json, expectation);
+}
+
+inline constexpr auto requiresFailDocument(
+    std::string_view json, std::string_view errorExpactation) {
+  return requiresFail(parser::ConsumerType::Document, json, errorExpactation);
 }
 
 TEST_CASE("consumeNull") {
   SECTION("positive") {
-    STATIC_REQUIRE_NULL_TEST_PASS("null");
-    STATIC_REQUIRE_NULL_TEST_PASS("null  ");
-    STATIC_REQUIRE_NULL_TEST_PASS("nullkdlsakl ");
-    STATIC_REQUIRE_NULL_TEST_PASS("nullnull");
-    STATIC_REQUIRE_NULL_TEST_PASS("null,");
+    STATIC_REQUIRE(requiresPassNull("null").has_value());
+    STATIC_REQUIRE(requiresPassNull("null  ").has_value());
+    STATIC_REQUIRE(requiresPassNull("nullkdlsakl ").has_value());
+    STATIC_REQUIRE(requiresPassNull("nullnull").has_value());
+    STATIC_REQUIRE(requiresPassNull("null,").has_value());
   }
   SECTION("negative") {
-    STATIC_REQUIRE_NULL_TEST_FAIL(
-        "nul l", "Expected null but couldn't parse it");
-    STATIC_REQUIRE_NULL_TEST_FAIL("nul", "Expected null but couldn't parse it");
-    STATIC_REQUIRE_NULL_TEST_FAIL(
-        " nullkdlsakl ", "Expected null but couldn't parse it");
-    STATIC_REQUIRE_NULL_TEST_FAIL(
-        "nnullnull", "Expected null but couldn't parse it");
-    STATIC_REQUIRE_NULL_TEST_FAIL(
-        ",null,", "Expected null but couldn't parse it");
+    STATIC_REQUIRE(requiresFailNull("nul l").has_value());
+    STATIC_REQUIRE(requiresFailNull("nul").has_value());
+    STATIC_REQUIRE(requiresFailNull(" nullkdlsakl ").has_value());
+    STATIC_REQUIRE(requiresFailNull("nnullnull").has_value());
+    STATIC_REQUIRE(requiresFailNull(",null,").has_value());
   }
 }
 
 TEST_CASE("consumeBoolean") {
   SECTION("positive-exact-true") {
-    STATIC_REQUIRE_BOOLEAN_TEST_PASS("true", "true");
-    STATIC_REQUIRE_BOOLEAN_TEST_PASS("true  ", "true");
-    STATIC_REQUIRE_BOOLEAN_TEST_PASS("truekdlsakl ", "true");
-    STATIC_REQUIRE_BOOLEAN_TEST_PASS("truetrue", "true");
-    STATIC_REQUIRE_BOOLEAN_TEST_PASS("true,", "true");
-    STATIC_REQUIRE_BOOLEAN_TEST_PASS("false", "false");
-    STATIC_REQUIRE_BOOLEAN_TEST_PASS("false  ", "false");
-    STATIC_REQUIRE_BOOLEAN_TEST_PASS("falsekdlsakl ", "false");
-    STATIC_REQUIRE_BOOLEAN_TEST_PASS("falsefalse", "false");
-    STATIC_REQUIRE_BOOLEAN_TEST_PASS("false,", "false");
+    STATIC_REQUIRE(requiresPassBoolean("true", true).has_value());
+    STATIC_REQUIRE(requiresPassBoolean("true  ", true).has_value());
+    STATIC_REQUIRE(requiresPassBoolean("truekdlsakl ", true).has_value());
+    STATIC_REQUIRE(requiresPassBoolean("truetrue", true).has_value());
+    STATIC_REQUIRE(requiresPassBoolean("true,", true).has_value());
+    STATIC_REQUIRE(requiresPassBoolean("false", false).has_value());
+    STATIC_REQUIRE(requiresPassBoolean("false  ", false).has_value());
+    STATIC_REQUIRE(requiresPassBoolean("falsekdlsakl ", false).has_value());
+    STATIC_REQUIRE(requiresPassBoolean("falsefalse", false).has_value());
+    STATIC_REQUIRE(requiresPassBoolean("false,", false).has_value());
   }
   SECTION("negative") {
-    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
-        " true", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
-        "ttrue  ", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
-        "ftruekdlsakl ", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
-        "trutrue", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
-        "truue,", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
-        " false", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
-        "ffalse  ", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
-        "tfalsekdlsakl ", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
-        "falsfalse", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_BOOLEAN_TEST_FAIL(
-        "falsse,", "Expected a boolean but couldn't parse it");
+    STATIC_REQUIRE(requiresFailBoolean(" true").has_value());
+    STATIC_REQUIRE(requiresFailBoolean("ttrue  ").has_value());
+    STATIC_REQUIRE(requiresFailBoolean("ftruekdlsakl ").has_value());
+    STATIC_REQUIRE(requiresFailBoolean("trutrue").has_value());
+    STATIC_REQUIRE(requiresFailBoolean("truue,").has_value());
+    STATIC_REQUIRE(requiresFailBoolean(" false").has_value());
+    STATIC_REQUIRE(requiresFailBoolean("ffalse  ").has_value());
+    STATIC_REQUIRE(requiresFailBoolean("tfalsekdlsakl ").has_value());
+    STATIC_REQUIRE(requiresFailBoolean("falsfalse").has_value());
+    STATIC_REQUIRE(requiresFailBoolean("falsse,").has_value());
   }
 }
 
 TEST_CASE("consumeNumber") {
   SECTION("positive-integer") {
-    STATIC_REQUIRE_NUMBER_TEST_PASS("8934523", "8934523");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-9053290 ", "-9053290");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("0\n", "0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-0%", "-0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS(
-        "8934523995834958493589435849582930432589230859320890,",
-        "8934523995834958493589435849582930432589230859320890");
-    STATIC_REQUIRE_NUMBER_TEST_PASS(
-        "-8934523995834958493589435849582930432589230859320890]",
-        "-8934523995834958493589435849582930432589230859320890");
+    STATIC_REQUIRE(requiresPassNumber("8934523", "8934523").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-9053290 ", "-9053290").has_value());
+    STATIC_REQUIRE(requiresPassNumber("0\n", "0").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-0%", "-0").has_value());
+    STATIC_REQUIRE(requiresPassNumber(
+                       "8934523995834958493589435849582930432589230859320890,",
+                       "8934523995834958493589435849582930432589230859320890")
+                       .has_value());
+    STATIC_REQUIRE(requiresPassNumber(
+                       "-8934523995834958493589435849582930432589230859320890]",
+                       "-8934523995834958493589435849582930432589230859320890")
+                       .has_value());
   }
   SECTION("positive-integer-with-fraction") {
-    STATIC_REQUIRE_NUMBER_TEST_PASS(
-        "654.932049320592095302}", "654.932049320592095302");
-    STATIC_REQUIRE_NUMBER_TEST_PASS(
-        "-905329532.395034859328{", "-905329532.395034859328");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("0.9538958293$", "0.9538958293");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-0.8594358698239\t", "-0.8594358698239");
-    STATIC_REQUIRE_NUMBER_TEST_PASS(
-        "90543905960950350259023592309.905238592385293502359802\b",
-        "90543905960950350259023592309.905238592385293502359802");
-    STATIC_REQUIRE_NUMBER_TEST_PASS(
-        "-90543905960950350259023592309.905238592385293502359802",
-        "-90543905960950350259023592309.905238592385293502359802");
+    STATIC_REQUIRE(
+        requiresPassNumber("654.932049320592095302}", "654.932049320592095302")
+            .has_value());
+    STATIC_REQUIRE(requiresPassNumber(
+                       "-905329532.395034859328{", "-905329532.395034859328")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresPassNumber("0.9538958293$", "0.9538958293").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-0.8594358698239\t", "-0.8594358698239")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresPassNumber(
+            "90543905960950350259023592309.905238592385293502359802\b",
+            "90543905960950350259023592309.905238592385293502359802")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassNumber(
+            "-90543905960950350259023592309.905238592385293502359802",
+            "-90543905960950350259023592309.905238592385293502359802")
+            .has_value());
   }
   SECTION("positive-integer-with-exponent") {
-    STATIC_REQUIRE_NUMBER_TEST_PASS("654e32", "654e32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-654e32", "-654e32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("654e-32", "654e-32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-654e-32", "-654e-32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("654e+32", "654e+32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-654e+32", "-654e+32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-654e+0", "-654e+0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-654e-0", "-654e-0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-0e-0", "-0e-0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-0e+0", "-0e+0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("0e-0", "0e-0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("0e+0", "0e+0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("654E32", "654E32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-654E32", "-654E32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("654E-32", "654E-32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-654E-32", "-654E-32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("654E+32", "654E+32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-654E+32", "-654E+32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-654E+0", "-654E+0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-654E-0", "-654E-0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-0E-0", "-0E-0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("-0E+0", "-0E+0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("0E-0", "0E-0");
-    STATIC_REQUIRE_NUMBER_TEST_PASS("0E+0", "0E+0");
+    STATIC_REQUIRE(requiresPassNumber("654e32", "654e32").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-654e32", "-654e32").has_value());
+    STATIC_REQUIRE(requiresPassNumber("654e-32", "654e-32").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-654e-32", "-654e-32").has_value());
+    STATIC_REQUIRE(requiresPassNumber("654e+32", "654e+32").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-654e+32", "-654e+32").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-654e+0", "-654e+0").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-654e-0", "-654e-0").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-0e-0", "-0e-0").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-0e+0", "-0e+0").has_value());
+    STATIC_REQUIRE(requiresPassNumber("0e-0", "0e-0").has_value());
+    STATIC_REQUIRE(requiresPassNumber("0e+0", "0e+0").has_value());
+    STATIC_REQUIRE(requiresPassNumber("654E32", "654E32").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-654E32", "-654E32").has_value());
+    STATIC_REQUIRE(requiresPassNumber("654E-32", "654E-32").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-654E-32", "-654E-32").has_value());
+    STATIC_REQUIRE(requiresPassNumber("654E+32", "654E+32").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-654E+32", "-654E+32").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-654E+0", "-654E+0").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-654E-0", "-654E-0").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-0E-0", "-0E-0").has_value());
+    STATIC_REQUIRE(requiresPassNumber("-0E+0", "-0E+0").has_value());
+    STATIC_REQUIRE(requiresPassNumber("0E-0", "0E-0").has_value());
+    STATIC_REQUIRE(requiresPassNumber("0E+0", "0E+0").has_value());
   }
   SECTION("positive-integer-with-fraction-and-exponent") {
-    STATIC_REQUIRE_NUMBER_TEST_PASS(
-        "48394328.5049053e332", "48394328.5049053e332");
-    STATIC_REQUIRE_NUMBER_TEST_PASS(
-        "-48394328.5049053e32", "-48394328.5049053e32");
-    STATIC_REQUIRE_NUMBER_TEST_PASS(
-        "48394328.5049053e+38", "48394328.5049053e+38");
-    STATIC_REQUIRE_NUMBER_TEST_PASS(
-        "48394328.5049053e-38", "48394328.5049053e-38");
+    STATIC_REQUIRE(
+        requiresPassNumber("48394328.5049053e332", "48394328.5049053e332")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassNumber("-48394328.5049053e32", "-48394328.5049053e32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassNumber("48394328.5049053e+38", "48394328.5049053e+38")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassNumber("48394328.5049053e-38", "48394328.5049053e-38")
+            .has_value());
   }
   SECTION("negative") {
-    STATIC_REQUIRE_NUMBER_TEST_FAIL("+954839593", "expected a digit or '-'");
-    STATIC_REQUIRE_NUMBER_TEST_FAIL(
-        "-.94032", "'-' should be followed by a digit");
-    STATIC_REQUIRE_NUMBER_TEST_FAIL(
-        "-0.e123", "'.' should be followed by a digit");
-    STATIC_REQUIRE_NUMBER_TEST_FAIL(
-        "-0.1Ea123", "'e(+/-)' or 'E(+/-)' should be followed by a digit");
-    STATIC_REQUIRE_NUMBER_TEST_FAIL(
-        "-0.1e+a123", "'e(+/-)' or 'E(+/-)' should be followed by a digit");
-    STATIC_REQUIRE_NUMBER_TEST_FAIL(
-        "-0.1E-a123", "'e(+/-)' or 'E(+/-)' should be followed by a digit");
+    STATIC_REQUIRE(requiresFailNumber("+954839593", "Expected a digit or '-'")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresFailNumber("-.94032", "'-' should be followed by a digit")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailNumber("-0.e123", "'.' should be followed by a digit")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailNumber(
+            "-0.1Ea123", "'e(+/-)' or 'E(+/-)' should be followed by a digit")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailNumber(
+            "-0.1e+a123", "'e(+/-)' or 'E(+/-)' should be followed by a digit")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailNumber(
+            "-0.1E-a123", "'e(+/-)' or 'E(+/-)' should be followed by a digit")
+            .has_value());
   }
 }
 
 TEST_CASE("consumeString") {
   SECTION("positive") {
-    STATIC_REQUIRE_STRING_TEST_PASS(R"("")", R"()");
-    STATIC_REQUIRE_STRING_TEST_PASS(R"("8934523")", R"(8934523)");
+    STATIC_REQUIRE(requiresPassString(R"("")", R"()").has_value());
+    STATIC_REQUIRE(
+        requiresPassString(R"("8934523")", R"(8934523)").has_value());
 
-    STATIC_REQUIRE_STRING_TEST_PASS(R"("\"8934523")", R"(\"8934523)");
-    STATIC_REQUIRE_STRING_TEST_PASS(
-        R"("\"89   lfewkl 34523" we are not interested in what happens after
-            ending quote)",
-        R"(\"89   lfewkl 34523)");
-    STATIC_REQUIRE_STRING_TEST_PASS(
-        R"("\\ \/ \b \f \r \t \n \u432AD" kbrejgiw)",
-        R"(\\ \/ \b \f \r \t \n \u432AD)");
+    STATIC_REQUIRE(
+        requiresPassString(R"("\"8934523")", R"(\"8934523)").has_value());
+    STATIC_REQUIRE(
+        requiresPassString(
+            R"("\"89   lfewkl 34523" we are not interested in what happens after ending quote)",
+            R"(\"89   lfewkl 34523)")
+            .has_value());
+    STATIC_REQUIRE(requiresPassString(
+                       R"("\\ \/ \b \f \r \t \n \u432AD" kbrejgiw)",
+                       R"(\\ \/ \b \f \r \t \n \u432AD)")
+                       .has_value());
   }
 
   SECTION("negative") {
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"( 8934523)", "Strings must begin with '\"'");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"("8934523)",
-        "Reached to end while looking for an enclosing '\"' "
-        "for the string");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"("8934523\")",
-        "Reached to end while looking for an enclosing '\"' "
-        "for the string");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"("\x")",
-        "Backslashes should be followed by one of the"
-        "escapable characters: \",b,f,n,r,t,u,\\,/");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"("\v")",
-        "Backslashes should be followed by one of the"
-        "escapable characters: \",b,f,n,r,t,u,\\,/");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"("\u")",
-        "\\u should be followed by 4 hexadecimal digits "
-        "for proper unicode escaping");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"("\u123")",
-        "\\u should be followed by 4 hexadecimal digits "
-        "for proper unicode escaping");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"("\u231G")",
-        "\\u should be followed by 4 hexadecimal digits "
-        "for proper unicode escaping");
-    STATIC_REQUIRE_STRING_TEST_FAIL(
-        R"("\u231x")",
-        "\\u should be followed by 4 hexadecimal digits "
-        "for proper unicode escaping");
+    STATIC_REQUIRE(
+        requiresFailString(R"( 8934523)", "Strings must begin with '\"'")
+            .has_value());
+    STATIC_REQUIRE(requiresFailString(
+                       R"("8934523)",
+                       "Reached to end while looking for an enclosing '\"' "
+                       "for the string")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailString(
+                       R"("8934523\")",
+                       "Reached to end while looking for an enclosing '\"' "
+                       "for the string")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailString(
+                       R"("\x")",
+                       "Backslashes should be followed by one of the"
+                       "escapable characters: \",b,f,n,r,t,u,\\,/")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailString(
+                       R"("\v")",
+                       "Backslashes should be followed by one of the"
+                       "escapable characters: \",b,f,n,r,t,u,\\,/")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailString(
+                       R"("\u")",
+                       "\\u should be followed by 4 hexadecimal digits "
+                       "for proper unicode escaping")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailString(
+                       R"("\u123")",
+                       "\\u should be followed by 4 hexadecimal digits "
+                       "for proper unicode escaping")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailString(
+                       R"("\u231G")",
+                       "\\u should be followed by 4 hexadecimal digits "
+                       "for proper unicode escaping")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailString(
+                       R"("\u231x")",
+                       "\\u should be followed by 4 hexadecimal digits "
+                       "for proper unicode escaping")
+                       .has_value());
   }
 }
 
 TEST_CASE("consumeValue") {
   SECTION("positive") {
-    STATIC_REQUIRE_VALUE_TEST_PASS("null", Null, "null");
-    STATIC_REQUIRE_VALUE_TEST_PASS("null  ", Null, "null");
-    STATIC_REQUIRE_VALUE_TEST_PASS("nullkdlsakl ", Null, "null");
-    STATIC_REQUIRE_VALUE_TEST_PASS("nullnull", Null, "null");
-    STATIC_REQUIRE_VALUE_TEST_PASS("null,", Null, "null");
-    STATIC_REQUIRE_VALUE_TEST_PASS("true", Boolean, "true");
-    STATIC_REQUIRE_VALUE_TEST_PASS("true  ", Boolean, "true");
-    STATIC_REQUIRE_VALUE_TEST_PASS("truekdlsakl ", Boolean, "true");
-    STATIC_REQUIRE_VALUE_TEST_PASS("truetrue", Boolean, "true");
-    STATIC_REQUIRE_VALUE_TEST_PASS("true,", Boolean, "true");
-    STATIC_REQUIRE_VALUE_TEST_PASS("false", Boolean, "false");
-    STATIC_REQUIRE_VALUE_TEST_PASS("false  ", Boolean, "false");
-    STATIC_REQUIRE_VALUE_TEST_PASS("falsekdlsakl ", Boolean, "false");
-    STATIC_REQUIRE_VALUE_TEST_PASS("falsefalse", Boolean, "false");
-    STATIC_REQUIRE_VALUE_TEST_PASS("false,", Boolean, "false");
-    STATIC_REQUIRE_VALUE_TEST_PASS("8934523", Number, "8934523");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-9053290 ", Number, "-9053290");
-    STATIC_REQUIRE_VALUE_TEST_PASS("0\n", Number, "0");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-0%", Number, "-0");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        "8934523995834958493589435849582930432589230859320890,", Number,
-        "8934523995834958493589435849582930432589230859320890");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        "-8934523995834958493589435849582930432589230859320890]", Number,
-        "-8934523995834958493589435849582930432589230859320890");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        "654.932049320592095302}", Number, "654.932049320592095302");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        "-905329532.395034859328{", Number, "-905329532.395034859328");
-    STATIC_REQUIRE_VALUE_TEST_PASS("0.9538958293$", Number, "0.9538958293");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        "-0.8594358698239\t", Number, "-0.8594358698239");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        "90543905960950350259023592309.905238592385293502359802\b", Number,
-        "90543905960950350259023592309.905238592385293502359802");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        "-90543905960950350259023592309.905238592385293502359802", Number,
-        "-90543905960950350259023592309.905238592385293502359802");
-    STATIC_REQUIRE_VALUE_TEST_PASS("654e32", Number, "654e32");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-654e32", Number, "-654e32");
-    STATIC_REQUIRE_VALUE_TEST_PASS("654e-32", Number, "654e-32");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-654e-32", Number, "-654e-32");
-    STATIC_REQUIRE_VALUE_TEST_PASS("654e+32", Number, "654e+32");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-654e+32", Number, "-654e+32");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-654e+0", Number, "-654e+0");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-654e-0", Number, "-654e-0");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-0e-0", Number, "-0e-0");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-0e+0", Number, "-0e+0");
-    STATIC_REQUIRE_VALUE_TEST_PASS("0e-0", Number, "0e-0");
-    STATIC_REQUIRE_VALUE_TEST_PASS("0e+0", Number, "0e+0");
-    STATIC_REQUIRE_VALUE_TEST_PASS("654E32", Number, "654E32");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-654E32", Number, "-654E32");
-    STATIC_REQUIRE_VALUE_TEST_PASS("654E-32", Number, "654E-32");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-654E-32", Number, "-654E-32");
-    STATIC_REQUIRE_VALUE_TEST_PASS("654E+32", Number, "654E+32");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-654E+32", Number, "-654E+32");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-654E+0", Number, "-654E+0");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-654E-0", Number, "-654E-0");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-0E-0", Number, "-0E-0");
-    STATIC_REQUIRE_VALUE_TEST_PASS("-0E+0", Number, "-0E+0");
-    STATIC_REQUIRE_VALUE_TEST_PASS("0E-0", Number, "0E-0");
-    STATIC_REQUIRE_VALUE_TEST_PASS("0E+0", Number, "0E+0");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        "48394328.5049053e332", Number, "48394328.5049053e332");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        "-48394328.5049053e32", Number, "-48394328.5049053e32");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        "48394328.5049053e+38", Number, "48394328.5049053e+38");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        "48394328.5049053e-38", Number, "48394328.5049053e-38");
-    STATIC_REQUIRE_VALUE_TEST_PASS(R"("")", String, R"()");
-    STATIC_REQUIRE_VALUE_TEST_PASS(R"("8934523")", String, R"(8934523)");
+    STATIC_REQUIRE(requiresPassValue("null", parser::Token::Type::Null, "null")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("null  ", parser::Token::Type::Null, "null")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("nullkdlsakl ", parser::Token::Type::Null, "null")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("nullnull", parser::Token::Type::Null, "null")
+            .has_value());
+    STATIC_REQUIRE(requiresPassValue("null,", parser::Token::Type::Null, "null")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("true", parser::Token::Type::Boolean, "true")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("true  ", parser::Token::Type::Boolean, "true")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("truekdlsakl ", parser::Token::Type::Boolean, "true")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("truetrue", parser::Token::Type::Boolean, "true")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("true,", parser::Token::Type::Boolean, "true")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("false", parser::Token::Type::Boolean, "false")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("false  ", parser::Token::Type::Boolean, "false")
+            .has_value());
+    STATIC_REQUIRE(requiresPassValue(
+                       "falsekdlsakl ", parser::Token::Type::Boolean, "false")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("falsefalse", parser::Token::Type::Boolean, "false")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("false,", parser::Token::Type::Boolean, "false")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("8934523", parser::Token::Type::Number, "8934523")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-9053290 ", parser::Token::Type::Number, "-9053290")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("0\n", parser::Token::Type::Number, "0").has_value());
+    STATIC_REQUIRE(requiresPassValue("-0%", parser::Token::Type::Number, "-0")
+                       .has_value());
+    STATIC_REQUIRE(requiresPassValue(
+                       "8934523995834958493589435849582930432589230859320890,",
+                       parser::Token::Type::Number,
+                       "8934523995834958493589435849582930432589230859320890")
+                       .has_value());
+    STATIC_REQUIRE(requiresPassValue(
+                       "-8934523995834958493589435849582930432589230859320890]",
+                       parser::Token::Type::Number,
+                       "-8934523995834958493589435849582930432589230859320890")
+                       .has_value());
+    STATIC_REQUIRE(requiresPassValue(
+                       "654.932049320592095302}", parser::Token::Type::Number,
+                       "654.932049320592095302")
+                       .has_value());
+    STATIC_REQUIRE(requiresPassValue(
+                       "-905329532.395034859328{", parser::Token::Type::Number,
+                       "-905329532.395034859328")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue(
+            "0.9538958293$", parser::Token::Type::Number, "0.9538958293")
+            .has_value());
+    STATIC_REQUIRE(requiresPassValue(
+                       "-0.8594358698239\t", parser::Token::Type::Number,
+                       "-0.8594358698239")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue(
+            "90543905960950350259023592309.905238592385293502359802\b",
+            parser::Token::Type::Number,
+            "90543905960950350259023592309.905238592385293502359802")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue(
+            "-90543905960950350259023592309.905238592385293502359802",
+            parser::Token::Type::Number,
+            "-90543905960950350259023592309.905238592385293502359802")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("654e32", parser::Token::Type::Number, "654e32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-654e32", parser::Token::Type::Number, "-654e32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("654e-32", parser::Token::Type::Number, "654e-32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-654e-32", parser::Token::Type::Number, "-654e-32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("654e+32", parser::Token::Type::Number, "654e+32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-654e+32", parser::Token::Type::Number, "-654e+32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-654e+0", parser::Token::Type::Number, "-654e+0")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-654e-0", parser::Token::Type::Number, "-654e-0")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-0e-0", parser::Token::Type::Number, "-0e-0")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-0e+0", parser::Token::Type::Number, "-0e+0")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("0e-0", parser::Token::Type::Number, "0e-0")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("0e+0", parser::Token::Type::Number, "0e+0")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("654E32", parser::Token::Type::Number, "654E32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-654E32", parser::Token::Type::Number, "-654E32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("654E-32", parser::Token::Type::Number, "654E-32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-654E-32", parser::Token::Type::Number, "-654E-32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("654E+32", parser::Token::Type::Number, "654E+32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-654E+32", parser::Token::Type::Number, "-654E+32")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-654E+0", parser::Token::Type::Number, "-654E+0")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-654E-0", parser::Token::Type::Number, "-654E-0")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-0E-0", parser::Token::Type::Number, "-0E-0")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("-0E+0", parser::Token::Type::Number, "-0E+0")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("0E-0", parser::Token::Type::Number, "0E-0")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue("0E+0", parser::Token::Type::Number, "0E+0")
+            .has_value());
+    STATIC_REQUIRE(requiresPassValue(
+                       "48394328.5049053e332", parser::Token::Type::Number,
+                       "48394328.5049053e332")
+                       .has_value());
+    STATIC_REQUIRE(requiresPassValue(
+                       "-48394328.5049053e32", parser::Token::Type::Number,
+                       "-48394328.5049053e32")
+                       .has_value());
+    STATIC_REQUIRE(requiresPassValue(
+                       "48394328.5049053e+38", parser::Token::Type::Number,
+                       "48394328.5049053e+38")
+                       .has_value());
+    STATIC_REQUIRE(requiresPassValue(
+                       "48394328.5049053e-38", parser::Token::Type::Number,
+                       "48394328.5049053e-38")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue(R"("")", parser::Token::Type::String, R"()")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue(
+            R"("8934523")", parser::Token::Type::String, R"(8934523)")
+            .has_value());
 
-    STATIC_REQUIRE_VALUE_TEST_PASS(R"("\"8934523")", String, R"(\"8934523)");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        R"("\"89   lfewkl 34523" we are not interested in what happens after
+    STATIC_REQUIRE(
+        requiresPassValue(
+            R"("\"8934523")", parser::Token::Type::String, R"(\"8934523)")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresPassValue(
+            R"("\"89   lfewkl 34523" we are not interested in what happens
+        after
             ending quote)",
-        String, R"(\"89   lfewkl 34523)");
-    STATIC_REQUIRE_VALUE_TEST_PASS(
-        R"("\\ \/ \b \f \r \t \n \u432AD" kbrejgiw)", String,
-        R"(\\ \/ \b \f \r \t \n \u432AD)");
+            parser::Token::Type::String, R"(\"89   lfewkl 34523)")
+            .has_value());
+    STATIC_REQUIRE(requiresPassValue(
+                       R"("\\ \/ \b \f \r \t \n \u432AD" kbrejgiw)",
+                       parser::Token::Type::String,
+                       R"(\\ \/ \b \f \r \t \n \u432AD)")
+                       .has_value());
   }
   SECTION("negative") {
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "nul l", "Expected null but couldn't parse it");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "nul", "Expected null but couldn't parse it");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        " nullkdlsakl ",
-        "Values can either be an object, an array, a string, a number, true, "
-        "false or null");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "nnullnull", "Expected null but couldn't parse it");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        ",null,",
-        "Values can either be an object, an array, a string, a number, true, "
-        "false or null");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        " true",
-        "Values can either be an object, an array, a string, a number, true, "
-        "false or null");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "ttrue  ", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "ftruekdlsakl ", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "trutrue", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "truue,", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        " false",
-        "Values can either be an object, an array, a string, a number, true, "
-        "false or null");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "ffalse  ", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "tfalsekdlsakl ", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "falsfalse", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "falsse,", "Expected a boolean but couldn't parse it");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "+954839593",
-        "Values can either be an object, an array, a string, a number, true, "
-        "false or null");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "-.94032", "'-' should be followed by a digit");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "-0.e123", "'.' should be followed by a digit");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "-0.1Ea123", "'e(+/-)' or 'E(+/-)' should be followed by a digit");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "-0.1e+a123", "'e(+/-)' or 'E(+/-)' should be followed by a digit");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        "-0.1E-a123", "'e(+/-)' or 'E(+/-)' should be followed by a digit");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        R"( 8934523)",
-        "Values can either be an object, an array, a string, a number, true, "
-        "false or null");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        R"("8934523)",
-        "Reached to end while looking for an enclosing '\"' "
-        "for the string");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        R"("8934523\")",
-        "Reached to end while looking for an enclosing '\"' "
-        "for the string");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        R"("\x")",
-        "Backslashes should be followed by one of the"
-        "escapable characters: \",b,f,n,r,t,u,\\,/");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        R"("\v")",
-        "Backslashes should be followed by one of the"
-        "escapable characters: \",b,f,n,r,t,u,\\,/");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        R"("\u")",
-        "\\u should be followed by 4 hexadecimal digits "
-        "for proper unicode escaping");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        R"("\u123")",
-        "\\u should be followed by 4 hexadecimal digits "
-        "for proper unicode escaping");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        R"("\u231G")",
-        "\\u should be followed by 4 hexadecimal digits "
-        "for proper unicode escaping");
-    STATIC_REQUIRE_VALUE_TEST_FAIL(
-        R"("\u231x")",
-        "\\u should be followed by 4 hexadecimal digits "
-        "for proper unicode escaping");
+    STATIC_REQUIRE(
+        requiresFailValue("nul l", "Expected null but couldn't parse it")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue("nul", "Expected null but couldn't parse it")
+            .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       " nullkdlsakl ",
+                       "Values can either be an object, an array, a string, a "
+                       "number, true, false or null")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue("nnullnull", "Expected null but couldn't parse it")
+            .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       ",null,",
+                       "Values can either be an object, an array, a string, a "
+                       "number, true, false or null")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       " true",
+                       "Values can either be an object, an array, a string, a "
+                       "number, true, false or null")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue("ttrue  ", "Expected a boolean but couldn't parse it")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue(
+            "ftruekdlsakl ", "Expected a boolean but couldn't parse it")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue("trutrue", "Expected a boolean but couldn't parse it")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue("truue,", "Expected a boolean but couldn't parse it")
+            .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       " false",
+                       "Values can either be an object, an array, a string, a "
+                       "number, true, false or null")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       "ffalse  ", "Expected a boolean but couldn't parse it")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue(
+            "tfalsekdlsakl ", "Expected a boolean but couldn't parse it")
+            .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       "falsfalse", "Expected a boolean but couldn't parse it")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue("falsse,", "Expected a boolean but couldn't parse it")
+            .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       "+954839593",
+                       "Values can either be an object, an array, a string, a "
+                       "number, true, false or null")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue("-.94032", "'-' should be followed by a digit")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue("-0.e123", "'.' should be followed by a digit")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue(
+            "-0.1Ea123", "'e(+/-)' or 'E(+/-)' should be followed by a digit")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue(
+            "-0.1e+a123", "'e(+/-)' or 'E(+/-)' should be followed by a digit")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailValue(
+            "-0.1E-a123", "'e(+/-)' or 'E(+/-)' should be followed by a digit")
+            .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       R"( 8934523)",
+                       "Values can either be an object, an array, a string, a "
+                       "number, true, false or null")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       R"("8934523)",
+                       "Reached to end while looking for an enclosing '\"' "
+                       "for the string")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       R"("8934523\")",
+                       "Reached to end while looking for an enclosing '\"' "
+                       "for the string")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       R"("\x")",
+                       "Backslashes should be followed by one of the"
+                       "escapable characters: \",b,f,n,r,t,u,\\,/")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       R"("\v")",
+                       "Backslashes should be followed by one of the"
+                       "escapable characters: \",b,f,n,r,t,u,\\,/")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       R"("\u")",
+                       "\\u should be followed by 4 hexadecimal digits "
+                       "for proper unicode escaping")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       R"("\u123")",
+                       "\\u should be followed by 4 hexadecimal digits "
+                       "for proper unicode escaping")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       R"("\u231G")",
+                       "\\u should be followed by 4 hexadecimal digits "
+                       "for proper unicode escaping")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailValue(
+                       R"("\u231x")",
+                       "\\u should be followed by 4 hexadecimal digits "
+                       "for proper unicode escaping")
+                       .has_value());
+  }
+}
+
+TEST_CASE("consumeArray") {
+  SECTION("positive") {
+    STATIC_REQUIRE(requiresPassArray(
+                       R"([
+      "string", 123e45, true, false, null, [], {}
+])",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::String, "string"},
+                           {parser::Token::Type::Number, "123e45"},
+                           {parser::Token::Type::Boolean, "true"},
+                           {parser::Token::Type::Boolean, "false"},
+                           {parser::Token::Type::Null, "null"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+    STATIC_REQUIRE(requiresPassArray(
+                       "[]",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassArray(
+                       "[1, 2, 3]",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Number, "1"},
+                           {parser::Token::Type::Number, "2"},
+                           {parser::Token::Type::Number, "3"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassArray(
+                       "[true, false, null]",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Boolean, "true"},
+                           {parser::Token::Type::Boolean, "false"},
+                           {parser::Token::Type::Null, "null"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassArray(
+                       R"([["nested", [123], []], "end"])",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::String, "nested"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Number, "123"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::String, "end"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+    STATIC_REQUIRE(requiresPassArray(
+                       "[[], [[]], [[], []]]",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassArray(
+                       R"(["text", 123, {}, [true, null], false])",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::String, "text"},
+                           {parser::Token::Type::Number, "123"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Boolean, "true"},
+                           {parser::Token::Type::Null, "null"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::Boolean, "false"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+  }
+  SECTION("negative") {
+    STATIC_REQUIRE(
+        requiresFailArray("[", "Arrays must end with ']'").has_value());
+
+    STATIC_REQUIRE(
+        requiresFailArray("]", "Arrays must begin with '['").has_value());
+    STATIC_REQUIRE(
+        requiresFailArray("[[1]", "Reached to end while looking for ',' or ']'")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailArray("[1 2]", "Expected ']' or ','").has_value());
+    STATIC_REQUIRE(
+        requiresFailArray("[[1],", "Reached to end while looking for a value")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailArray("[1, 2, ]", "',' should not be followed by ']'")
+            .has_value());
+
+    STATIC_REQUIRE(
+        requiresFailArray("[null, true false]", "Expected ']' or ','")
+            .has_value());
+  }
+}
+
+TEST_CASE("consumeObject") {
+  SECTION("positive") {
+    STATIC_REQUIRE(requiresPassObject(
+                       "{}",
+                       {
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassObject(
+                       R"({"key": "value"})",
+                       {
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "key"},
+                           {parser::Token::Type::String, "value"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassObject(
+                       R"({"a":1, "b":true, "c":null})",
+                       {
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "a"},
+                           {parser::Token::Type::Number, "1"},
+                           {parser::Token::Type::String, "b"},
+                           {parser::Token::Type::Boolean, "true"},
+                           {parser::Token::Type::String, "c"},
+                           {parser::Token::Type::Null, "null"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassObject(
+                       R"({"nested": {"inner": 42}})",
+                       {
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "nested"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "inner"},
+                           {parser::Token::Type::Number, "42"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassObject(
+                       R"({"arr": [1, 2, 3]})",
+                       {
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "arr"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Number, "1"},
+                           {parser::Token::Type::Number, "2"},
+                           {parser::Token::Type::Number, "3"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                       })
+                       .has_value());
+    STATIC_REQUIRE(requiresPassObject(
+                       R"({
+                            "name": "Example",
+                            "attributes": {
+                                "id": 123,
+                                "active": true,
+                                "tags": ["alpha", "beta", "gamma", "delta"]
+                            },
+                            "metrics": {
+                                "scores": [1, 2, 3, 4, 5, 6],
+                                "flags": [true, false, null]
+                            },
+                            "data": {
+                                "items": [
+                                    {"key": "a", "value": 1},
+                                    {"key": "b", "value": 2}
+                                ]
+                            }
+                        })",
+                       {
+
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "name"},
+                           {parser::Token::Type::String, "Example"},
+                           {parser::Token::Type::String, "attributes"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "id"},
+                           {parser::Token::Type::Number, "123"},
+                           {parser::Token::Type::String, "active"},
+                           {parser::Token::Type::Boolean, "true"},
+                           {parser::Token::Type::String, "tags"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::String, "alpha"},
+                           {parser::Token::Type::String, "beta"},
+                           {parser::Token::Type::String, "gamma"},
+                           {parser::Token::Type::String, "delta"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::String, "metrics"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "scores"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Number, "1"},
+                           {parser::Token::Type::Number, "2"},
+                           {parser::Token::Type::Number, "3"},
+                           {parser::Token::Type::Number, "4"},
+                           {parser::Token::Type::Number, "5"},
+                           {parser::Token::Type::Number, "6"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::String, "flags"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Boolean, "true"},
+                           {parser::Token::Type::Boolean, "false"},
+                           {parser::Token::Type::Null, "null"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::String, "data"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "items"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "key"},
+                           {parser::Token::Type::String, "a"},
+                           {parser::Token::Type::String, "value"},
+                           {parser::Token::Type::Number, "1"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "key"},
+                           {parser::Token::Type::String, "b"},
+                           {parser::Token::Type::String, "value"},
+                           {parser::Token::Type::Number, "2"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                       })
+                       .has_value());
+  }
+  SECTION("negative") {
+    STATIC_REQUIRE(requiresFailObject(
+                       R"("arr": [1, 2, 3]})", "Objects must begin with '{'")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresFailObject(R"({)", "Objects must end with '}'").has_value());
+    STATIC_REQUIRE(
+        requiresFailObject(R"({"arr")", "Reached to end while looking for ':'")
+            .has_value());
+    STATIC_REQUIRE(requiresFailObject(
+                       R"({"arr",)", "key-value pairs must be separated by ','")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailObject(
+                       R"({"arr":)", "Reached to end while looking for a value")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresFailObject(
+            R"({"arr":"value")", "Reached to end while looking for ',' or '}'")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailObject(
+            R"({"arr":"value",)", "Reached to end while looking for a key")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailObject(
+            R"({"arr":"value",})", "',' should not be followed by '}'")
+            .has_value());
   }
 }
 
 TEST_CASE("consumeDocument") {
-  SECTION("empty-document") {
-    constexpr auto json = "";
-    STATIC_REQUIRE_FALSE_COUNTER_AND_EXTRACTOR(
-        counter_error, extractor_error, json, parser::ConsumerType::Document);
-    STATIC_REQUIRE(counter_error.message_ == "Empty document");
-    STATIC_REQUIRE(extractor_error.message_ == "Empty document");
-  }
-
-  SECTION("empty-object") {
-    constexpr auto json = "{}";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Document);
-    STATIC_REQUIRE(counter.count_ == 2);
-    STATIC_REQUIRE(extractor.index_ == 2);
-    STATIC_REQUIRE(
-        extractor.tokens_[0].type_ == parser::Token::Type::ObjectBegin);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "{");
-    STATIC_REQUIRE(
-        extractor.tokens_[1].type_ == parser::Token::Type::ObjectEnd);
-    STATIC_REQUIRE(extractor.tokens_[1].string_ == "}");
-  }
-
-  SECTION("empty-array") {
-    constexpr auto json = "[]";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Document);
-    STATIC_REQUIRE(counter.count_ == 2);
-    STATIC_REQUIRE(extractor.index_ == 2);
-    STATIC_REQUIRE(
-        extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
-    STATIC_REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::ArrayEnd);
-    STATIC_REQUIRE(extractor.tokens_[1].string_ == "]");
-  }
-
-  SECTION("simple-object") {
-    constexpr auto json = R"(
-{
-      "key" : "value"
-}
-)";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Document);
-    STATIC_REQUIRE(counter.count_ == 4);
-    STATIC_REQUIRE(extractor.index_ == 4);
-    STATIC_REQUIRE(
-        extractor.tokens_[0].type_ == parser::Token::Type::ObjectBegin);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "{");
-    STATIC_REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[1].string_ == "key");
-    STATIC_REQUIRE(extractor.tokens_[2].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[2].string_ == "value");
-    STATIC_REQUIRE(
-        extractor.tokens_[3].type_ == parser::Token::Type::ObjectEnd);
-    STATIC_REQUIRE(extractor.tokens_[3].string_ == "}");
-  }
-
-  SECTION("simple-array-of-strings") {
-    constexpr auto json = R"(
+  SECTION("positive") {
+    STATIC_REQUIRE(requiresPassDocument(
+                       R"(
 [
-      "Some", "strings", "here", "for", "a", "test",
-      "unicode \u343A escape", "\b\f\n\r\t\""
-]
-)";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Document);
-    STATIC_REQUIRE(counter.count_ == 10);
-    STATIC_REQUIRE(extractor.index_ == 10);
-    STATIC_REQUIRE(
-        extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
-    STATIC_REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[1].string_ == "Some");
-    STATIC_REQUIRE(extractor.tokens_[2].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[2].string_ == "strings");
-    STATIC_REQUIRE(extractor.tokens_[3].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[3].string_ == "here");
-    STATIC_REQUIRE(extractor.tokens_[4].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[4].string_ == "for");
-    STATIC_REQUIRE(extractor.tokens_[5].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[5].string_ == "a");
-    STATIC_REQUIRE(extractor.tokens_[6].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[6].string_ == "test");
-    STATIC_REQUIRE(extractor.tokens_[7].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[7].string_ == R"(unicode \u343A escape)");
-    STATIC_REQUIRE(extractor.tokens_[8].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[8].string_ == R"(\b\f\n\r\t\")");
-    STATIC_REQUIRE(extractor.tokens_[9].type_ == parser::Token::Type::ArrayEnd);
-    STATIC_REQUIRE(extractor.tokens_[9].string_ == "]");
+      "string", 123e45, true, false, null, [], {}
+])",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::String, "string"},
+                           {parser::Token::Type::Number, "123e45"},
+                           {parser::Token::Type::Boolean, "true"},
+                           {parser::Token::Type::Boolean, "false"},
+                           {parser::Token::Type::Null, "null"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+    STATIC_REQUIRE(requiresPassDocument(
+                       "[]",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassDocument(
+                       "[1, 2, 3]",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Number, "1"},
+                           {parser::Token::Type::Number, "2"},
+                           {parser::Token::Type::Number, "3"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassDocument(
+                       "   [true, false, null]",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Boolean, "true"},
+                           {parser::Token::Type::Boolean, "false"},
+                           {parser::Token::Type::Null, "null"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassDocument(
+                       R"(            [["nested", [123], []], "end"]        )",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::String, "nested"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Number, "123"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::String, "end"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+    STATIC_REQUIRE(requiresPassDocument(
+                       "[[], [[]], [[], []]]            ",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassDocument(
+                       R"(["text", 123, {}, [true, null], false] 
+                         
+
+
+                         )",
+                       {
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::String, "text"},
+                           {parser::Token::Type::Number, "123"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Boolean, "true"},
+                           {parser::Token::Type::Null, "null"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::Boolean, "false"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                       })
+                       .has_value());
+    STATIC_REQUIRE(requiresPassDocument(
+                       "{}",
+                       {
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassDocument(
+                       R"({"key": "value"})",
+                       {
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "key"},
+                           {parser::Token::Type::String, "value"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassDocument(
+                       R"({"a":1, "b":true, "c":null})",
+                       {
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "a"},
+                           {parser::Token::Type::Number, "1"},
+                           {parser::Token::Type::String, "b"},
+                           {parser::Token::Type::Boolean, "true"},
+                           {parser::Token::Type::String, "c"},
+                           {parser::Token::Type::Null, "null"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassDocument(
+                       R"({"nested": {"inner": 42}})",
+                       {
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "nested"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "inner"},
+                           {parser::Token::Type::Number, "42"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                       })
+                       .has_value());
+
+    STATIC_REQUIRE(requiresPassDocument(
+                       R"({"arr": [1, 2, 3]})",
+                       {
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "arr"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Number, "1"},
+                           {parser::Token::Type::Number, "2"},
+                           {parser::Token::Type::Number, "3"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                       })
+                       .has_value());
+    STATIC_REQUIRE(requiresPassDocument(
+                       R"(
+                         
+         
+                         
+           
+                         
+                         
+                         
+           
+                         
+                         
+                         
+                         
+                         
+                         
+                         
+                         
+                         
+                         
+                         {
+                             "name": "Example",
+                             "attributes": {
+                                 "id": 123,
+                                 "active": true,
+                                 "tags": ["alpha", "beta", "gamma", "delta"]
+                             },
+                             "metrics": {
+                                 "scores": [1, 2, 3, 4, 5, 6],
+                                 "flags": [true, false, null]
+                             },
+                             "data": {
+                                 "items": [
+                                     {"key": "a", "value": 1},
+                                     {"key": "b", "value": 2}
+                                 ]
+                             }
+                         }
+                             
+                         
+                         
+                         
+        )",
+                       {
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "name"},
+                           {parser::Token::Type::String, "Example"},
+                           {parser::Token::Type::String, "attributes"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "id"},
+                           {parser::Token::Type::Number, "123"},
+                           {parser::Token::Type::String, "active"},
+                           {parser::Token::Type::Boolean, "true"},
+                           {parser::Token::Type::String, "tags"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::String, "alpha"},
+                           {parser::Token::Type::String, "beta"},
+                           {parser::Token::Type::String, "gamma"},
+                           {parser::Token::Type::String, "delta"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::String, "metrics"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "scores"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Number, "1"},
+                           {parser::Token::Type::Number, "2"},
+                           {parser::Token::Type::Number, "3"},
+                           {parser::Token::Type::Number, "4"},
+                           {parser::Token::Type::Number, "5"},
+                           {parser::Token::Type::Number, "6"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::String, "flags"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::Boolean, "true"},
+                           {parser::Token::Type::Boolean, "false"},
+                           {parser::Token::Type::Null, "null"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::String, "data"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "items"},
+                           {parser::Token::Type::ArrayBegin, "["},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "key"},
+                           {parser::Token::Type::String, "a"},
+                           {parser::Token::Type::String, "value"},
+                           {parser::Token::Type::Number, "1"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::ObjectBegin, "{"},
+                           {parser::Token::Type::String, "key"},
+                           {parser::Token::Type::String, "b"},
+                           {parser::Token::Type::String, "value"},
+                           {parser::Token::Type::Number, "2"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::ArrayEnd, "]"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                           {parser::Token::Type::ObjectEnd, "}"},
+                       })
+                       .has_value());
   }
+  SECTION("negative") {
+    STATIC_REQUIRE(requiresFailDocument(
+                       R"(
+        
+)",
+                       "Empty document")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresFailDocument("[", "Arrays must end with ']'").has_value());
 
-  SECTION("simple-array-of-numbers") {
-    constexpr auto json = R"(
-[
-      1, 2.5, 0.2, 0e123, 5e-1, 10e+23,
-      -1, -2.5, -0.2, -0e123, -5e-1, -10e+23
-]
-)";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Document);
-    STATIC_REQUIRE(counter.count_ == 14);
-    STATIC_REQUIRE(extractor.index_ == 14);
+    STATIC_REQUIRE(requiresFailDocument(
+                       "]", "Document must start with an object or an array")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailDocument(
+                       "[[1]", "Reached to end while looking for ',' or ']'")
+                       .has_value());
     STATIC_REQUIRE(
-        extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
-    STATIC_REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[1].string_ == "1");
-    STATIC_REQUIRE(extractor.tokens_[2].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[2].string_ == "2.5");
-    STATIC_REQUIRE(extractor.tokens_[3].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[3].string_ == "0.2");
-    STATIC_REQUIRE(extractor.tokens_[4].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[4].string_ == "0e123");
-    STATIC_REQUIRE(extractor.tokens_[5].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[5].string_ == "5e-1");
-    STATIC_REQUIRE(extractor.tokens_[6].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[6].string_ == "10e+23");
-    STATIC_REQUIRE(extractor.tokens_[7].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[7].string_ == "-1");
-    STATIC_REQUIRE(extractor.tokens_[8].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[8].string_ == "-2.5");
-    STATIC_REQUIRE(extractor.tokens_[9].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[9].string_ == "-0.2");
-    STATIC_REQUIRE(extractor.tokens_[10].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[10].string_ == "-0e123");
-    STATIC_REQUIRE(extractor.tokens_[11].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[11].string_ == "-5e-1");
-    STATIC_REQUIRE(extractor.tokens_[12].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[12].string_ == "-10e+23");
+        requiresFailDocument("[1 2]", "Expected ']' or ','").has_value());
+    STATIC_REQUIRE(requiresFailDocument(
+                       "[[1],", "Reached to end while looking for a value")
+                       .has_value());
     STATIC_REQUIRE(
-        extractor.tokens_[13].type_ == parser::Token::Type::ArrayEnd);
-    STATIC_REQUIRE(extractor.tokens_[13].string_ == "]");
-  }
+        requiresFailDocument("[1, 2, ]", "',' should not be followed by ']'")
+            .has_value());
 
-  SECTION("simple-array-of-booleans-and-nulls") {
-    constexpr auto json = R"(
-      [
-        true, null,       false, true, null,null, true,
-        false,
-                  false,
-                                    false,
-                 true,
-        null
-      ]
-    )";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Document);
-    STATIC_REQUIRE(counter.count_ == 14);
-    STATIC_REQUIRE(extractor.index_ == 14);
     STATIC_REQUIRE(
-        extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
-    STATIC_REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[1].string_ == "true");
-    STATIC_REQUIRE(extractor.tokens_[2].type_ == parser::Token::Type::Null);
-    STATIC_REQUIRE(extractor.tokens_[2].string_ == "null");
-    STATIC_REQUIRE(extractor.tokens_[3].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[3].string_ == "false");
-    STATIC_REQUIRE(extractor.tokens_[4].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[4].string_ == "true");
-    STATIC_REQUIRE(extractor.tokens_[5].type_ == parser::Token::Type::Null);
-    STATIC_REQUIRE(extractor.tokens_[5].string_ == "null");
-    STATIC_REQUIRE(extractor.tokens_[6].type_ == parser::Token::Type::Null);
-    STATIC_REQUIRE(extractor.tokens_[6].string_ == "null");
-    STATIC_REQUIRE(extractor.tokens_[7].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[7].string_ == "true");
-    STATIC_REQUIRE(extractor.tokens_[8].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[8].string_ == "false");
-    STATIC_REQUIRE(extractor.tokens_[9].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[9].string_ == "false");
-    STATIC_REQUIRE(extractor.tokens_[10].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[10].string_ == "false");
-    STATIC_REQUIRE(extractor.tokens_[11].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[11].string_ == "true");
-    STATIC_REQUIRE(extractor.tokens_[12].type_ == parser::Token::Type::Null);
-    STATIC_REQUIRE(extractor.tokens_[12].string_ == "null");
+        requiresFailDocument("[null, true false]", "Expected ']' or ','")
+            .has_value());
+    STATIC_REQUIRE(requiresFailDocument(
+                       R"("arr": [1, 2, 3]})",
+                       "Document must start with an object or an array")
+                       .has_value());
     STATIC_REQUIRE(
-        extractor.tokens_[13].type_ == parser::Token::Type::ArrayEnd);
-    STATIC_REQUIRE(extractor.tokens_[13].string_ == "]");
-  }
+        requiresFailDocument(R"({)", "Objects must end with '}'").has_value());
+    STATIC_REQUIRE(requiresFailDocument(
+                       R"({"arr")", "Reached to end while looking for ':'")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailDocument(
+                       R"({"arr",)", "key-value pairs must be separated by ','")
+                       .has_value());
+    STATIC_REQUIRE(requiresFailDocument(
+                       R"({"arr":)", "Reached to end while looking for a value")
+                       .has_value());
+    STATIC_REQUIRE(
+        requiresFailDocument(
+            R"({"arr":"value")", "Reached to end while looking for ',' or '}'")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailDocument(
+            R"({"arr":"value",)", "Reached to end while looking for a key")
+            .has_value());
+    STATIC_REQUIRE(
+        requiresFailDocument(
+            R"({"arr":"value",})", "',' should not be followed by '}'")
+            .has_value());
 
-  SECTION("vulnerable-cases") {
-    constexpr auto json = R"(
-      [
-    [], {}, [], [{}]
-      ]
-    )";
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Document);
-    STATIC_REQUIRE(counter.count_ == 12);
-    STATIC_REQUIRE(extractor.index_ == 12);
-    STATIC_REQUIRE(
-        extractor.tokens_[0].type_ == parser::Token::Type::ArrayBegin);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "[");
-    STATIC_REQUIRE(
-        extractor.tokens_[1].type_ == parser::Token::Type::ArrayBegin);
-    STATIC_REQUIRE(extractor.tokens_[1].string_ == "[");
-    STATIC_REQUIRE(extractor.tokens_[2].type_ == parser::Token::Type::ArrayEnd);
-    STATIC_REQUIRE(extractor.tokens_[2].string_ == "]");
-    STATIC_REQUIRE(
-        extractor.tokens_[3].type_ == parser::Token::Type::ObjectBegin);
-    STATIC_REQUIRE(extractor.tokens_[3].string_ == "{");
-    STATIC_REQUIRE(
-        extractor.tokens_[4].type_ == parser::Token::Type::ObjectEnd);
-    STATIC_REQUIRE(extractor.tokens_[4].string_ == "}");
-    STATIC_REQUIRE(
-        extractor.tokens_[5].type_ == parser::Token::Type::ArrayBegin);
-    STATIC_REQUIRE(extractor.tokens_[5].string_ == "[");
-    STATIC_REQUIRE(extractor.tokens_[6].type_ == parser::Token::Type::ArrayEnd);
-    STATIC_REQUIRE(extractor.tokens_[6].string_ == "]");
-    STATIC_REQUIRE(
-        extractor.tokens_[7].type_ == parser::Token::Type::ArrayBegin);
-    STATIC_REQUIRE(extractor.tokens_[7].string_ == "[");
-    STATIC_REQUIRE(
-        extractor.tokens_[8].type_ == parser::Token::Type::ObjectBegin);
-    STATIC_REQUIRE(extractor.tokens_[8].string_ == "{");
-    STATIC_REQUIRE(
-        extractor.tokens_[9].type_ == parser::Token::Type::ObjectEnd);
-    STATIC_REQUIRE(extractor.tokens_[9].string_ == "}");
-    STATIC_REQUIRE(
-        extractor.tokens_[10].type_ == parser::Token::Type::ArrayEnd);
-    STATIC_REQUIRE(extractor.tokens_[10].string_ == "]");
-    STATIC_REQUIRE(
-        extractor.tokens_[11].type_ == parser::Token::Type::ArrayEnd);
-    STATIC_REQUIRE(extractor.tokens_[11].string_ == "]");
-  }
-
-  SECTION("Everything in an object") {
-    constexpr auto json = R"({
-      "string": "string",
-      "number1": 19059043,
-      "number2": 0.439253095,
-      "number3": -0.00034230,
-      "number4": 0.439253095e+56,
-      "number5": -0.00034230e56,
-      "number6": -0.00034230e-56,
-      "number7": 140932e+56,
-      "number8": 140932e56,
-      "number9": 140932e-56,
-      "null": null,
-      "true": true,
-      "false": false,
-      "array" : [
-        "string", 3.14, null, true, false, {}, []
-      ]
-  })";
-
-    STATIC_REQUIRE_COUNTER_AND_EXTRACTOR(
-        counter, extractor, json, parser::ConsumerType::Document);
-    STATIC_REQUIRE(counter.count_ == 40);
-    STATIC_REQUIRE(extractor.index_ == 40);
-    STATIC_REQUIRE(
-        extractor.tokens_[0].type_ == parser::Token::Type::ObjectBegin);
-    STATIC_REQUIRE(extractor.tokens_[0].string_ == "{");
-    STATIC_REQUIRE(extractor.tokens_[1].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[1].string_ == "string");
-    STATIC_REQUIRE(extractor.tokens_[2].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[2].string_ == "string");
-    STATIC_REQUIRE(extractor.tokens_[3].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[3].string_ == "number1");
-    STATIC_REQUIRE(extractor.tokens_[4].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[4].string_ == "19059043");
-    STATIC_REQUIRE(extractor.tokens_[5].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[5].string_ == "number2");
-    STATIC_REQUIRE(extractor.tokens_[6].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[6].string_ == "0.439253095");
-    STATIC_REQUIRE(extractor.tokens_[7].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[7].string_ == "number3");
-    STATIC_REQUIRE(extractor.tokens_[8].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[8].string_ == "-0.00034230");
-    STATIC_REQUIRE(extractor.tokens_[9].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[9].string_ == "number4");
-    STATIC_REQUIRE(extractor.tokens_[10].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[10].string_ == "0.439253095e+56");
-    STATIC_REQUIRE(extractor.tokens_[11].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[11].string_ == "number5");
-    STATIC_REQUIRE(extractor.tokens_[12].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[12].string_ == "-0.00034230e56");
-    STATIC_REQUIRE(extractor.tokens_[13].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[13].string_ == "number6");
-    STATIC_REQUIRE(extractor.tokens_[14].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[14].string_ == "-0.00034230e-56");
-    STATIC_REQUIRE(extractor.tokens_[15].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[15].string_ == "number7");
-    STATIC_REQUIRE(extractor.tokens_[16].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[16].string_ == "140932e+56");
-    STATIC_REQUIRE(extractor.tokens_[17].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[17].string_ == "number8");
-    STATIC_REQUIRE(extractor.tokens_[18].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[18].string_ == "140932e56");
-    STATIC_REQUIRE(extractor.tokens_[19].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[19].string_ == "number9");
-    STATIC_REQUIRE(extractor.tokens_[20].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[20].string_ == "140932e-56");
-    STATIC_REQUIRE(extractor.tokens_[21].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[21].string_ == "null");
-    STATIC_REQUIRE(extractor.tokens_[22].type_ == parser::Token::Type::Null);
-    STATIC_REQUIRE(extractor.tokens_[22].string_ == "null");
-    STATIC_REQUIRE(extractor.tokens_[23].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[23].string_ == "true");
-    STATIC_REQUIRE(extractor.tokens_[24].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[24].string_ == "true");
-    STATIC_REQUIRE(extractor.tokens_[25].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[25].string_ == "false");
-    STATIC_REQUIRE(extractor.tokens_[26].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[26].string_ == "false");
-    STATIC_REQUIRE(extractor.tokens_[27].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[27].string_ == "array");
-    STATIC_REQUIRE(
-        extractor.tokens_[28].type_ == parser::Token::Type::ArrayBegin);
-    STATIC_REQUIRE(extractor.tokens_[28].string_ == "[");
-    STATIC_REQUIRE(extractor.tokens_[29].type_ == parser::Token::Type::String);
-    STATIC_REQUIRE(extractor.tokens_[29].string_ == "string");
-    STATIC_REQUIRE(extractor.tokens_[30].type_ == parser::Token::Type::Number);
-    STATIC_REQUIRE(extractor.tokens_[30].string_ == "3.14");
-    STATIC_REQUIRE(extractor.tokens_[31].type_ == parser::Token::Type::Null);
-    STATIC_REQUIRE(extractor.tokens_[31].string_ == "null");
-    STATIC_REQUIRE(extractor.tokens_[32].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[32].string_ == "true");
-    STATIC_REQUIRE(extractor.tokens_[33].type_ == parser::Token::Type::Boolean);
-    STATIC_REQUIRE(extractor.tokens_[33].string_ == "false");
-    STATIC_REQUIRE(
-        extractor.tokens_[34].type_ == parser::Token::Type::ObjectBegin);
-    STATIC_REQUIRE(extractor.tokens_[34].string_ == "{");
-    STATIC_REQUIRE(
-        extractor.tokens_[35].type_ == parser::Token::Type::ObjectEnd);
-    STATIC_REQUIRE(extractor.tokens_[35].string_ == "}");
-    STATIC_REQUIRE(
-        extractor.tokens_[36].type_ == parser::Token::Type::ArrayBegin);
-    STATIC_REQUIRE(extractor.tokens_[36].string_ == "[");
-    STATIC_REQUIRE(
-        extractor.tokens_[37].type_ == parser::Token::Type::ArrayEnd);
-    STATIC_REQUIRE(extractor.tokens_[37].string_ == "]");
-    STATIC_REQUIRE(
-        extractor.tokens_[38].type_ == parser::Token::Type::ArrayEnd);
-    STATIC_REQUIRE(extractor.tokens_[38].string_ == "]");
-    STATIC_REQUIRE(
-        extractor.tokens_[39].type_ == parser::Token::Type::ObjectEnd);
-    STATIC_REQUIRE(extractor.tokens_[39].string_ == "}");
+    STATIC_REQUIRE(requiresFailDocument(
+                       R"({"arr":"value"} {})",
+                       "Parsing document is finished yet there are still "
+                       "non-whitespace characters")
+                       .has_value());
   }
 }
 

@@ -149,7 +149,7 @@ inline constexpr CursorOrError shouldSkipIntegerPart(JsonCursor cursor) {
            .predicate = utility::isDigit,
            .errorInfo =
                {.message = negative ? "'-' should be followed by a digit"
-                                    : "expected a digit or '-'",
+                                    : "Expected a digit or '-'",
                 .type = Token::Type::Number}})
        | stdext::and_then(AdvanceWhile{
            .predicate = utility::isDigit, .reachingEndAsError = false});
@@ -325,7 +325,9 @@ inline constexpr bool canConsume(JsonCursor cursor, ConsumerType type) {
       return canConsume(cursor, ConsumerType::String)
           || canConsume(cursor, ConsumerType::Number)
           || canConsume(cursor, ConsumerType::Boolean)
-          || canConsume(cursor, ConsumerType::Null);
+          || canConsume(cursor, ConsumerType::Null)
+          || canConsume(cursor, ConsumerType::Array)
+          || canConsume(cursor, ConsumerType::Object);
     case ConsumerType::String:
       return utility::isQuote(c);
     case ConsumerType::StringContent:
@@ -386,6 +388,41 @@ struct Consume {
   }
 };
 
+template<typename Predicate>
+struct ShouldNotBeNext {
+  Predicate predicate;
+  ErrorInfo errorInfo{};
+
+  inline constexpr CursorOrError operator()(JsonCursor cursor) {
+    if (canRead(cursor) && predicate(peek(cursor))) {
+      return errorInfo.makeError(cursor);
+    }
+    return cursor;
+  }
+};
+
+template<typename Predicate>
+struct ShouldSafelyAdvanceCommaOrReachEndIndicator {
+  Predicate endIndicator;
+  ErrorInfo errorInfo{};
+  ErrorInfo errorReachedEnd{};
+  ErrorInfo errorEndIndicatorAfterComma{};
+
+  inline constexpr CursorOrError operator()(JsonCursor cursor) {
+    if (canRead(cursor) && endIndicator(peek(cursor))) {
+      return cursor;
+    }
+    return CursorOrError(cursor)
+         | stdext::and_then(ShouldAdvance{
+             .predicate = utility::isComma, .errorInfo = errorInfo})
+         | stdext::and_then(AdvanceWhile{
+             .predicate = utility::isWhitespace, .errorInfo = errorReachedEnd})
+         | stdext::and_then(ShouldNotBeNext{
+             .predicate = endIndicator,
+             .errorInfo = errorEndIndicatorAfterComma});
+  }
+};
+
 inline constexpr CursorOrError advanceUnicode(JsonCursor cursor) {
   return ShouldAdvance{
       .predicate = utility::isHexadecimal,
@@ -413,6 +450,7 @@ inline constexpr CursorOrError advanceBackslash(JsonCursor cursor) {
                  .type = Token::Type::String}});
   }
 }
+
 }  // namespace details::_parser
 
 constexpr CursorOrError consumeDocument(
@@ -427,8 +465,17 @@ constexpr CursorOrError consumeDocument(
        | stdext::and_then(SelectConsumer{
            .consumer = consumer,
            .allowedConsumerTypes = {ConsumerType::Object, ConsumerType::Array},
+           .errorInfo =
+               {.message = "Document must start with an object or an array",
+                .type = Token::Type::Invalid}})
+       | stdext::and_then(AdvanceWhile{
+           .predicate = utility::isWhitespace, .reachingEndAsError = false})
+       | stdext::transform(&mark)
+       | stdext::and_then(ShouldNotBeNext{
+           .predicate = !utility::isWhitespace,
            .errorInfo = {
-               .message = "Document must start with an object or an array",
+               .message = "Parsing document is finished yet there are still "
+                          "non-whitespace characters",
                .type = Token::Type::Invalid}});
 }
 
@@ -458,84 +505,53 @@ constexpr CursorOrError consumeObject(
 constexpr CursorOrError consumeKeyValuePairs(
     JsonCursor cursor, Consumer auto& consumer) {
   using namespace details::_parser;
-  auto cur = CursorOrError(cursor)
-           | stdext::and_then(AdvanceWhile{
-               .predicate = utility::isWhitespace,
-               .errorInfo = {
-                   .message = "Reached to end while looking for a key",
-                   .type = Token::Type::String}});
-  if (!cur.has_value()) {
-    return cur;
+  if (canRead(cursor) && utility::isRightBrace(peek(cursor))) {
+    return CursorOrError(cursor) | stdext::transform(&mark)
+         | stdext::and_then(ShouldAdvance{.predicate = utility::isRightBrace})
+         | stdext::and_then(
+               Consume{.consumer = consumer, .type = Token::Type::ObjectEnd});
   }
-  {
-    auto curEnd =
-        cur | stdext::transform(&mark)
-        | stdext::and_then(ShouldAdvance{.predicate = utility::isRightBrace});
-    if (curEnd.has_value()) {
-      return curEnd
-           | stdext::and_then(Consume{
-               .consumer = consumer,
-               .type = Token::Type::ObjectEnd,
-           });
-    }
-  }
-  auto curCont =
-      cur | stdext::transform(&mark)
-      | stdext::and_then(DispatchToConsumer{
-          .consumer = consumer, .allowedConsumerType = ConsumerType::String})
-      | stdext::and_then(AdvanceWhile{
-          .predicate = utility::isWhitespace,
-          .errorInfo =
-              {.message = "Reached to end while looking for colon",
-               .type = Token::Type::String}})
-      | stdext::transform(&mark)
-      | stdext::and_then(ShouldAdvance{
-          .predicate = utility::isColon,
-          .errorInfo =
-              {.message = "Keys must be separated by ':' from values",
-               .type = Token::Type::Invalid}})
-      | stdext::transform(&mark)
-      | stdext::and_then(AdvanceWhile{
-          .predicate = utility::isWhitespace,
-          .errorInfo =
-              {.message = "Reached to end while looking for a value",
-               .type = Token::Type::String}})
-      | stdext::transform(&mark)
-      | stdext::and_then(DispatchToConsumer{
-          .consumer = consumer, .allowedConsumerType = ConsumerType::Value})
-      | stdext::and_then(AdvanceWhile{
-          .predicate = utility::isWhitespace,
-          .errorInfo = {
-              .message = "Reached to end while looking for the end of object "
-                         "or a comma to separate key-value pairs",
-              .type = Token::Type::Invalid}});
-  if (!curCont.has_value()) {
-    return curCont;
-  }
-  auto curEnd = curCont | stdext::transform(&mark)
-              | stdext::and_then(ShouldAdvance{
-                  .predicate = utility::isRightBrace,
-                  .steps = 1,
-                  .errorInfo = ErrorInfo{}});
-  if (curEnd.has_value()) {
-    return curEnd
-         | stdext::and_then(Consume{
-             .consumer = consumer,
-             .type = Token::Type::ObjectEnd,
-         });
-  }
-  auto ret = curCont
-           | stdext::and_then(ShouldAdvance{
-               .predicate = utility::isComma,
-               .errorInfo =
-                   ErrorInfo{
-                       .message = "Key-value pairs must be a separated by ','",
-                       .type = Token::Type::Invalid}})
-           | stdext::transform(&mark)
-           | stdext::and_then(DispatchToConsumer{
-               .consumer = consumer,
-               .allowedConsumerType = ConsumerType::KeyValues});
-  return ret;
+  return CursorOrError(cursor) | stdext::transform(&mark)
+       | stdext::and_then(DispatchToConsumer{
+           .consumer = consumer, .allowedConsumerType = ConsumerType::String})
+       | stdext::and_then(AdvanceWhile{
+           .predicate = utility::isWhitespace,
+           .errorInfo{
+               .message = "Reached to end while looking for ':'",
+               .type = Token::Type::ObjectEnd}})
+       | stdext::and_then(ShouldAdvance{
+           .predicate = utility::isColon,
+           .errorInfo =
+               {.message = "key-value pairs must be separated by ','",
+                .type = Token::Type::ObjectEnd}})
+       | stdext::and_then(AdvanceWhile{
+           .predicate = utility::isWhitespace,
+           .errorInfo{
+               .message = "Reached to end while looking for a value",
+               .type = Token::Type::ObjectEnd}})
+       | stdext::transform(&mark)
+       | stdext::and_then(DispatchToConsumer{
+           .consumer = consumer, .allowedConsumerType = ConsumerType::Value})
+       | stdext::and_then(AdvanceWhile{
+           .predicate = utility::isWhitespace,
+           .errorInfo{
+               .message = "Reached to end while looking for ',' or '}'",
+               .type = Token::Type::ObjectEnd}})
+       | stdext::and_then(ShouldSafelyAdvanceCommaOrReachEndIndicator{
+           .endIndicator = utility::isRightBrace,
+           .errorInfo =
+               {.message = "Expected '}' or ','",
+                .type = Token::Type::ObjectEnd},
+           .errorReachedEnd =
+               {.message = "Reached to end while looking for a key",
+                .type = Token::Type::ObjectEnd},
+           .errorEndIndicatorAfterComma =
+               {.message = "',' should not be followed by '}'",
+                .type = Token::Type::ObjectEnd}})
+       | stdext::transform(&mark)
+       | stdext::and_then(DispatchToConsumer{
+           .consumer = consumer,
+           .allowedConsumerType = ConsumerType::KeyValues});
 }
 
 constexpr CursorOrError consumeArray(
@@ -552,7 +568,7 @@ constexpr CursorOrError consumeArray(
        | stdext::and_then(AdvanceWhile{
            .predicate = utility::isWhitespace,
            .errorInfo =
-               {.message = "Arrays must end with '}'",
+               {.message = "Arrays must end with ']'",
                 .type = Token::Type::ArrayEnd}})
        | stdext::transform(&mark)
        | stdext::and_then(DispatchToConsumer{
@@ -563,56 +579,32 @@ constexpr CursorOrError consumeArray(
 constexpr CursorOrError consumeArrayElements(
     JsonCursor cursor, Consumer auto& consumer) {
   using namespace details::_parser;
-  auto cur = CursorOrError(cursor)
-           | stdext::and_then(AdvanceWhile{
-               .predicate = utility::isWhitespace,
-               .errorInfo = {
-                   .message = "Reached to end while looking for a value ",
-                   .type = Token::Type::Invalid}});
-  if (!cur.has_value()) {
-    return cur;
+
+  if (canRead(cursor) && utility::isRightBracket(peek(cursor))) {
+    return CursorOrError(cursor) | stdext::transform(&mark)
+         | stdext::and_then(ShouldAdvance{.predicate = utility::isRightBracket})
+         | stdext::and_then(
+               Consume{.consumer = consumer, .type = Token::Type::ArrayEnd});
   }
-  {
-    auto curEnd =
-        cur | stdext::transform(&mark)
-        | stdext::and_then(ShouldAdvance{.predicate = utility::isRightBracket});
-    if (curEnd.has_value()) {
-      return curEnd
-           | stdext::and_then(Consume{
-               .consumer = consumer,
-               .type = Token::Type::ArrayEnd,
-           });
-    }
-  }
-  auto curCont =
-      cur | stdext::transform(&mark)
-      | stdext::and_then(DispatchToConsumer{
-          .consumer = consumer, .allowedConsumerType = ConsumerType::Value})
-      | stdext::and_then(AdvanceWhile{
-          .predicate = utility::isWhitespace,
-          .reachingEndAsError = true,
-          .errorInfo = {
-              .message =
-                  "Reached to end while looking for comma or end of array ",
-              .type = Token::Type::Invalid}});
-  {
-    auto curEnd =
-        curCont | stdext::transform(&mark)
-        | stdext::and_then(ShouldAdvance{.predicate = utility::isRightBracket});
-    if (curEnd.has_value()) {
-      return curEnd
-           | stdext::and_then(Consume{
-               .consumer = consumer,
-               .type = Token::Type::ArrayEnd,
-           });
-    }
-  }
-  return curCont
-       | stdext::and_then(ShouldAdvance{
-           .predicate = utility::isComma,
+  return CursorOrError(cursor) | stdext::transform(&mark)
+       | stdext::and_then(DispatchToConsumer{
+           .consumer = consumer, .allowedConsumerType = ConsumerType::Value})
+       | stdext::and_then(AdvanceWhile{
+           .predicate = utility::isWhitespace,
            .errorInfo =
-               {.message = "Values must be a separated by ','",
-                .type = Token::Type::Invalid}})
+               {.message = "Reached to end while looking for ',' or ']'",
+                .type = Token::Type::ArrayEnd}})
+       | stdext::and_then(ShouldSafelyAdvanceCommaOrReachEndIndicator{
+           .endIndicator = utility::isRightBracket,
+           .errorInfo =
+               {.message = "Expected ']' or ','",
+                .type = Token::Type::ArrayEnd},
+           .errorReachedEnd =
+               {.message = "Reached to end while looking for a value",
+                .type = Token::Type::ArrayEnd},
+           .errorEndIndicatorAfterComma =
+               {.message = "',' should not be followed by ']'",
+                .type = Token::Type::ArrayEnd}})
        | stdext::transform(&mark)
        | stdext::and_then(DispatchToConsumer{
            .consumer = consumer,

@@ -13,6 +13,7 @@ add_subdirectory(core)
 add_subdirectory(stdext)
 add_subdirectory(args)
 add_subdirectory(json)
+add_subdirectory(math)
 
 add_test(
   NAME cmake-install
